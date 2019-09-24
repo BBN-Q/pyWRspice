@@ -10,7 +10,7 @@ import logging, os
 
 # Get the style from NODE_STYLE.csv spreadsheet
 dir_path = os.path.dirname(os.path.realpath(__file__))
-NODE_STYLE = pd.read_csv(os.path.join(dir_path,"NODE_STYLE.csv"), index_col="initial")
+NODE_STYLE = pd.read_csv(os.path.join(dir_path,"data/NODE_STYLE.csv"), index_col="initial")
 
 class Component:
     """ General form of an electronic component """
