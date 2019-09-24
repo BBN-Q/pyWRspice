@@ -1,0 +1,39 @@
+﻿initial,comment,size,color
+0,node,30,#CCCCCC
+1,node,30,#CCCCCC
+2,node,31,#CCCCCC
+3,node,32,#CCCCCC
+4,node,33,#CCCCCC
+5,node,34,#CCCCCC
+6,node,35,#CCCCCC
+7,node,36,#CCCCCC
+8,node,37,#CCCCCC
+9,node,38,#CCCCCC
+A,,30,black
+B,Josephson junction,900,#CC99FF
+C,capacitor,600,#66CCFF
+D,,30,black
+E,,30,black
+F,,30,black
+G,,30,black
+H,,30,black
+I,current sourse,900,#FFCC66
+J,,30,black
+K,,30,black
+L,inductor,600,#CCFF99
+M,,30,black
+N,,30,black
+O,transmission line,600,#FFCCFF
+P,,30,black
+Q,,30,black
+R,resistor,600,#CCCC99
+S,,30,black
+T,transmission line,600,#FFCCFF
+U,,30,black
+V,voltage source,900,#FF9966
+W,,30,black
+X,subcircuit,900,#99FFCC
+Y,,30,black
+Z,,30,black
+GND,ground,100,#999999
+PORT,ports,300,#FF0000
