@@ -4,6 +4,7 @@
     Assist constructing a WRspice script
 """
 
+import numpy as np
 import networkx as nx
 import pandas as pd
 import logging, os
@@ -16,13 +17,27 @@ class Component:
     """ General form of an electronic component """
     def __init__(self,name,ports=[],value=None,params={},comment=""):
         self.name = name
-        self.ports = ports
+        self.ports = [str(p) for p in ports]
+        self.ports_numeric = np.arange(len(ports), dtype=np.int) + 1
         self.value = value
         self.params = params
         self.comment = comment
 
     def script(self):
         """ Generate a WRspice script """
+        if len(self.comment)>0:
+            disp = ("* %s" %self.comment) + "\n"
+        else:
+            disp = ""
+        disp += str(self.name) + ''.join([' '+str(p) for p in self.ports_numeric])
+        if self.value is not None:
+            disp += ' ' + str(self.value)
+        if len(self.params.keys())>0:
+            for k,v in self.params.items():
+                disp += ' ' + k+'='+str(v)
+        return disp
+
+    def __repr__(self):
         if len(self.comment)>0:
             disp = ("* %s" %self.comment) + "\n"
         else:
@@ -34,9 +49,6 @@ class Component:
             for k,v in self.params.items():
                 disp += ' ' + k+'='+str(v)
         return disp
-
-    def __repr__(self):
-        return self.script()
 
 class Node:
     """ Electrical element or connection node"""
@@ -58,8 +70,8 @@ class Node:
         return Node(name,attrs)
 
     @classmethod
-    def from_number(self,num):
-        if num==0:
+    def from_port(self,num):
+        if num=='0':
             # Create a separate ground node
             i = 0
             while "GND"+str(i) in self.existing_nodes:
@@ -117,6 +129,7 @@ class Circuit:
 
     def script(self):
         """ Generate a WRspice script for the circuit """
+        self._assign_ports()
         text = []
         # Declare all subcircuits
         for name,subckt in self.subcircuits.items():
@@ -138,6 +151,22 @@ class Circuit:
             text.append(self._extrascript)
         return "\n".join(text)
 
+    def get_ports(self):
+        """ Get all ports """
+        all_ports = ['0']
+        for com in self.components.values():
+            for p in com.ports:
+                if str(p) not in all_ports:
+                    all_ports.append(str(p))
+        return all_ports
+
+    def _assign_ports(self):
+        """ Assign numbers to ports """
+        # Get all ports and translate to numeric ports
+        all_ports = self.get_ports()
+        for com in self.components.values():
+            com.ports_numeric = [all_ports.index(str(p)) for p in com.ports]
+
     def _get_key(self,node):
         label = str(node)
         if label[:3].upper()=="GND":
@@ -155,7 +184,7 @@ class Circuit:
             nodes = []
             nodes.append(Node.from_component(comp))
             for p in comp.ports:
-                nodes.append(Node.from_number(p))
+                nodes.append(Node.from_port(p))
             for node in nodes:
                 graph.add_node(node.name,**node.attrs)
             for i in range(1,len(nodes)):
@@ -202,7 +231,7 @@ class SubCircuit:
     def __init__(self,name,circuit,ports,params={}):
         self.name = name
         self.circuit = circuit
-        self.ports = ports
+        self.ports = [str(p) for p in ports]
         self.params = params
 
     def plot(self,**kwargs):
@@ -214,7 +243,10 @@ class SubCircuit:
         ckt.plot(**kwargs)
 
     def script(self):
-        line = self.__repr__()
+        all_ports = self.circuit.get_ports()
+        line = ".subckt " + self.name + "".join([' '+str(all_ports.index(str(p))) for p in self.ports])
+        for k,v in self.params.items():
+            line += ' ' + k + '=' + str(v)
         return "\n".join([line,self.circuit.script(),".ends "+self.name])
 
     def __repr__(self):
@@ -271,6 +303,9 @@ class Script:
 
     def script(self):
         """ Return a WRspice script """
+        # Get all the ports
+        cir_all = self._combine_circuit()
+        cir_all._assign_ports()
         text = ["*"+self.title, self.analysis]
         text += [ckt.script() for ckt in self.circuits]
         text += self.controls
@@ -298,10 +333,15 @@ class Script:
         for k,v in kwargs.items():
             self.params[k] = v
 
-    def plot(self,**kwargs):
-        """ Plot the combined circuit """
+    def _combine_circuit(self):
+        """ Combine all the circuits into one """
         cir_all = Circuit()
         for ckt in self.circuits:
             for k,comp in ckt.components.items():
                 cir_all.add_component(comp)
+        return cir_all
+
+    def plot(self,**kwargs):
+        """ Plot the combined circuit """
+        cir_all = self._combine_circuit()
         cir_all.plot(**kwargs)
