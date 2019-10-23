@@ -280,23 +280,23 @@ class Script:
     def add_control(self,ctrl):
         self.controls.append(str(ctrl))
 
-    def config_save(self,variables,filename=None,filetype="binary"):
+    def config_save(self,ports,filename=None,filetype="binary"):
         """ Specify what and how to save data """
-        self.save_variables = variables
+        self.save_ports = ports
         self.save_file = filename
         self.save_type = filetype
 
-    def _save_block(self):
+    def _save_block(self,all_ports):
         """ Compose a control block specifying saving config """
         if self.save_file is not None:
             self.params["output_file"] = self.save_file
         lines = [".control", "run"]
         lines.append("set filetype=%s" %self.save_type)
         line = "write {output_file}"
-        if (not isinstance(self.save_variables,str)) and hasattr(self.save_variables,'__iter__'):
-            line += "".join([" "+str(vari) for vari in self.save_variables])
+        if (not isinstance(self.save_ports,str)) and hasattr(self.save_ports,'__iter__'):
+            line += "".join([" "+str(all_ports.index(str(p))) for p in self.save_ports])
         else:
-            line += " " + str(self.save_variables)
+            line += " " + str(all_ports.index(str(self.save_ports)))
         lines.append(line)
         lines.append(".endc")
         return "\n".join(lines)
@@ -314,7 +314,7 @@ class Script:
             for k,v in self.options.items():
                 options += " {}={}".format(k,v)
             text.append(options)
-        text.append(self._save_block())
+        text.append(self._save_block(cir_all.get_ports()))
         return "\n".join(text)
 
     def get_params(self):
