@@ -294,9 +294,9 @@ class Script:
         lines.append("set filetype=%s" %self.save_type)
         line = "write {output_file}"
         if (not isinstance(self.save_ports,str)) and hasattr(self.save_ports,'__iter__'):
-            line += "".join([" "+str(all_ports.index(str(p))) for p in self.save_ports])
+            line += "".join([" v("+str(all_ports.index(str(p)))+')' for p in self.save_ports])
         else:
-            line += " " + str(all_ports.index(str(self.save_ports)))
+            line += " v(" + str(all_ports.index(str(self.save_ports))) + ')'
         lines.append(line)
         lines.append(".endc")
         return "\n".join(lines)
