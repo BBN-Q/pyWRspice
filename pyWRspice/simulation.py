@@ -434,7 +434,7 @@ class RawFile:
     def to_array(self):
         """ Convert variables to numpy array """
         data = [vari.values for vari in self.variables]
-        return np.array(data).T
+        return np.array(data)
 
 
 #------------------------------
