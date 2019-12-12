@@ -431,6 +431,11 @@ class RawFile:
             data[vari.name] = vari.values
         return pd.DataFrame(data)
 
+    def to_array(self):
+        """ Convert variables to numpy array """
+        data = [vari.values for vari in self.variables]
+        return np.array(data).T
+
 
 #------------------------------
 # Write vectors into rawfile
