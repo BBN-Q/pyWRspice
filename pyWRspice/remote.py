@@ -17,6 +17,11 @@ from simulation import RawFile, backslash
 
 logging.basicConfig(level=logging.WARNING)
 
+# Get the run_parallel.py file
+dir_path = os.path.dirname(os.path.realpath(__file__))
+fname_exec = "run_parallel.py"
+fname_exec_local = os.path.join(dir_path,"data",fname_exec)
+
 #------------------------------------------
 # Wrapper for convenient parallel loops
 #------------------------------------------
@@ -62,18 +67,22 @@ class WRWrapper_SSH:
                 SSH_run(ssh,"mkdir tmp")
             self.remote_dir = os.path.join(SSH_run(ssh,"pwd")[0],"tmp")
             ssh.close()
+            logging.info("Created new remote temporary folder: %s" %self.remote_dir)
         else:
             self.remote_dir = remote_dir
 
     def new_connection(self):
         """ Make new SSH connection to the server """
+        logging.debug("Open a new SSH connection")
         ssh = SSHClient()
         ssh.load_system_host_keys()
         ssh.connect(self.server,username=self.login_user,password=self.login_pass)
         return ssh
 
-    def get(self,fnames):
-        """ Transfer file(s) from remote to local """
+    def get(self,fnames,relative=True):
+        """ Transfer file(s) from remote to local
+        relative: if True, fnames are relative to the remote working directory
+        """
         ssh = self.new_connection()
         sftp = ssh.open_sftp()
         if isinstance(fnames,str):
@@ -81,17 +90,25 @@ class WRWrapper_SSH:
         # get local fnames
         local_fnames = []
         for fname in fnames:
-            local_fname = os.path.join(self.local_dir,fname)
-            sftp.get(backslash(os.path.join(self.remote_dir,fname)),local_fname)
+            if relative:
+                local_fname = os.path.join(self.local_dir,fname)
+                remote_fname = backslash(os.path.join(self.remote_dir,fname))
+            else:
+                local_fname = os.path.join(self.local_dir,os.path.basename(fname))
+                remote_fname = backslash(fname)
+            sftp.get(remote_fname,local_fname)
             local_fnames.append(local_fname)
         sftp.close()
         ssh.close()
+        logging.info("Retrieved files from remote: %s" %fnames)
         if len(local_fnames)==1:
             return local_fnames[0]
         return local_fnames
 
-    def put(self,fnames):
-        """ Transfer file(s) from local to remote """
+    def put(self,fnames,relative=True):
+        """ Transfer file(s) from local to remote
+        relative: if True, fnames are relative to the local working directory
+        """
         ssh = self.new_connection()
         sftp = ssh.open_sftp()
         if isinstance(fnames,str):
@@ -99,11 +116,17 @@ class WRWrapper_SSH:
         # get remote fnames
         remote_fnames = []
         for fname in fnames:
-            remote_fname = backslash(os.path.join(self.remote_dir,fname))
-            sftp.put(os.path.join(self.local_dir,fname),remote_fname)
+            if relative:
+                remote_fname = backslash(os.path.join(self.remote_dir,fname))
+                local_fname = os.path.join(self.local_dir,fname)
+            else:
+                remote_fname = backslash(os.path.join(self.remote_dir,os.path.basename(fname)))
+                local_fname = fname
+            sftp.put(local_fname,remote_fname)
             remote_fnames.append(remote_fname)
         sftp.close()
         ssh.close()
+        logging.info("Sent files to remote: %s" %fnames)
         if len(remote_fnames)==1:
             return remote_fnames[0]
         return remote_fnames
@@ -122,6 +145,7 @@ class WRWrapper_SSH:
         """ Run a file on a server """
         client = self.new_connection()
         cmd = self.command + " -b {}".format(fname_remote)
+        logging.info("Run on remote: %s" %cmd)
         msg = SSH_run(client,cmd)
         client.close()
         return msg
@@ -169,6 +193,7 @@ class WRWrapper_SSH:
         output_fname_local = self.get(output_fname)
         rawfile = RawFile(output_fname_local, binary=True)
         if not save_file:
+            logging.debug("Remove temporary files")
             os.remove(os.path.join(self.local_dir,circuit_fname))
             os.remove(output_fname_local)
             # Remove files on the server
@@ -223,15 +248,23 @@ class WRWrapper_SSH:
             output_fnames.append(output_fname)
             circuit_fnames_local.append(os.path.join(self.local_dir,circuit_fname))
             output_fnames_remote.append(os.path.join(self.remote_dir,output_fname))
-
         # Copy all circuit files to server
         circuit_fnames_remote = self.put(circuit_fnames)
+        fin_local = os.path.join(self.local_dir,"fileslist.txt")
+        lines = [self.command + " -b "]
+        for fname in circuit_fnames_remote:
+            lines.append(fname)
+        with open(fin_local,'w') as f:
+            f.write("\n".join(lines))
+
+        fname_exec_remote = self.put(fname_exec_local,relative=False)
+        fin_remote = self.put(fin_local,relative=False)
         # Simulate in parallel
-        with Pool(processes=processes) as pool:
-            results = []
-            for fname in circuit_fnames_remote:
-                results.append(pool.apply_async(self.run_file,(fname,)))
-            results = [result.get() for result in results]
+        client = self.new_connection()
+        cmd = "python %s %s --processes=%d" %(fname_exec_remote,fin_remote,processes)
+        logging.info("Run on remote: %s" %cmd)
+        SSH_run(client,cmd)
+        client.close()
         # Get output files back to local
         output_fnames_local = self.get(output_fnames)
         # Extract data
@@ -240,8 +273,12 @@ class WRWrapper_SSH:
             data.append(RawFile(fname,binary=True))
         # Delete files if necessary
         if not save_file:
+            logging.debug("Remove temporary files")
             client = self.new_connection()
             sftp = client.open_sftp()
+            os.remove(fin_local)
+            sftp.remove(fname_exec_remote)
+            sftp.remove(fin_remote)
             for ckt_fname_local, ckt_fname_remote, out_fname_local, out_fname_remote \
              in zip(circuit_fnames_local,circuit_fnames_remote,output_fnames_local,output_fnames_remote):
                 os.remove(ckt_fname_local)
