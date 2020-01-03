@@ -3,6 +3,9 @@
 """
     Run multiple python scripts in parallel using multiprocessing
 """
+import numpy as np
+import pandas as pd
+from datetime import datetime
 from multiprocessing import Pool
 import os, sys, getopt, subprocess
 
@@ -22,22 +25,31 @@ def run_one(cmd):
         else:
             return msg
 
-def run_batch(fin,processes=16):
+def run_batch(fconfig,processes=16):
     """ Run a file with multiprocessing
 
-    The file fin must contain the command in the first line
-    then the list of file names thereafter
+    The file fconfig must contain the command in the second line
+    then the list of file names in the column "circuit_file"
+
+    When done: write a dummy file starting with 'finish_'
     """
-    with open(fin,'r') as f:
-        lines = f.readlines()
-    command = lines[0].strip()
-    fnames = [line.strip() for line in lines[1:]]
+    with open(fconfig,'r') as f:
+        f.readline()
+        command = f.readline().strip()[1:]
+    df = pd.read_csv(fconfig,skiprows=2)
+    fnames = np.array(df["circuit_file"])
     cmds = [command + " {}".format(fname) for fname in fnames]
     with Pool(processes=processes) as pool:
         results = []
         for cmd in cmds:
             results.append(pool.apply_async(run_one, (cmd,)))
         results = [result.get() for result in results]
+    # Write a dummy file to indicate the completion of the simulation
+    now = datetime.now()
+    fend = os.path.join(os.path.dirname(fconfig),"finish_" + os.path.basename(fconfig)[:-4] + ".txt")
+    with open(fend,'w') as f:
+        f.write("Finished simulation of: %s \n" %fconfig)
+        f.write("Finished at: %s \n" %now.strftime("%Y-%m-%d %H:%M:%S"))
     return results
 
 def main():

@@ -8,7 +8,9 @@
 """
 
 import numpy as np
+import pandas as pd
 import os, tempfile, time
+from datetime import datetime
 import uuid, itertools, logging
 from multiprocessing import Pool
 from paramiko.client import SSHClient
@@ -19,8 +21,8 @@ logging.basicConfig(level=logging.WARNING)
 
 # Get the run_parallel.py file
 dir_path = os.path.dirname(os.path.realpath(__file__))
-fname_exec = "run_parallel.py"
-fname_exec_local = os.path.join(dir_path,"data",fname_exec)
+fexec = "run_parallel.py"
+fexec_orig = os.path.join(dir_path,"data",fexec)
 
 #------------------------------------------
 # Wrapper for convenient parallel loops
@@ -206,16 +208,13 @@ class WRWrapper_SSH:
             client.close()
         return rawfile
 
-    def run_parallel(self, *script, processes=16, save_file=False,reshape=True, **params):
-        """ Use multiprocessing to run in parallel
-
-        script: WRspice script to be simulated.
-        processes: number of parallel processes
-        if reshape==False: return output data as a 1-dim array
-        """
+    def prepare_parallel(self, *script, **params):
+        """ Write script files on local and remote locations
+        to prepare for the actual simulation execution """
         if len(script)>0:
             # Assume the first argument is the script
             self.script = script[0]
+        # Disintegrate the parameters (dict)
         iter_params = {}
         kws = {}
         for k,v in params.items():
@@ -227,9 +226,7 @@ class WRWrapper_SSH:
         param_vals = list(itertools.product(*[iter_params[k] for k in iter_params.keys()]))
         # Write circuit files
         circuit_fnames = []
-        output_fnames = []
-        circuit_fnames_local = []
-        output_fnames_remote = []
+        all_params = []
         for i,vals in enumerate(param_vals):
             kws_cp = kws.copy()
             for pname,val in zip(iter_params.keys(), vals):
@@ -243,61 +240,160 @@ class WRWrapper_SSH:
                 kws_cp["output_file"] = "tmp_output_" + '_'.join([str(val) for val in vals]) + ".raw"
             else:
                 kws_cp["output_file"] = kws_cp["output_file"][:-4] + ''.join(['_'+str(val) for val in vals]) + ".raw"
+
             circuit_fname, output_fname = self._render(self.script,kws_cp)
             circuit_fnames.append(circuit_fname)
-            output_fnames.append(output_fname)
-            circuit_fnames_local.append(os.path.join(self.local_dir,circuit_fname))
-            output_fnames_remote.append(os.path.join(self.remote_dir,output_fname))
+            kws_cp["circuit_file"] = backslash(os.path.join(self.remote_dir,kws_cp["circuit_file"]))
+            all_params.append(kws_cp)
         # Copy all circuit files to server
         circuit_fnames_remote = self.put(circuit_fnames)
-        fin_local = os.path.join(self.local_dir,"fileslist.txt")
-        lines = [self.command + " -b "]
-        for fname in circuit_fnames_remote:
-            lines.append(fname)
-        with open(fin_local,'w') as f:
-            f.write("\n".join(lines))
+        # Write config file
+        now = datetime.now().strftime("%Y%m%d_%H%M%S")
+        fconfig = "simconfig_" + now + ".csv"
+        fconfig_local = os.path.join(self.local_dir,fconfig)
+        comments = []
+        comments.append("# To run manually: python %s %s --processes=<num>" %(fexec,fconfig))
+        comments.append('#' + self.command + " -b ")
+        with open(fconfig_local,'w') as f:
+            f.write("".join([cmt + "\n" for cmt in comments]))
+        df = pd.DataFrame(all_params)
+        df.to_csv(fconfig_local,mode='a',index=False)
+        self.put(fconfig)
+        # Copy exec file
+        self.put(fexec_orig,relative=False)
+        self.get(fexec)
+        return fconfig
 
-        fname_exec_remote = self.put(fname_exec_local,relative=False)
-        fin_remote = self.put(fin_local,relative=False)
-        # Simulate in parallel
+    def get_results(self,fconfig,timeout=10,read_raw=False):
+        """ Get simulation results from server
+
+        timeout (seconds): Maximum time to wait until the simulation finishes
+        read_raw: If True, import raw files into memory; otherwise, return filenames only
+        """
+        # First check if the simulation has finished
+        t0 = time.time()
+        t1 = time.time()
+        fend = "finish_" + fconfig[:-4] + ".txt"
+        fend_remote = backslash(os.path.join(self.remote_dir,fend))
         client = self.new_connection()
-        cmd = "python %s %s --processes=%d" %(fname_exec_remote,fin_remote,processes)
-        logging.info("Run on remote: %s" %cmd)
-        SSH_run(client,cmd)
+        while t1-t0 < timeout:
+            flist = SSH_run(client,"ls %s" %self.remote_dir)
+            if fend not in flist:
+                time.sleep(10)
+                t1 = time.time()
+            else:
+                break
         client.close()
-        # Get output files back to local
-        output_fnames_local = self.get(output_fnames)
-        # Extract data
-        data = []
-        for fname in output_fnames_local:
-            data.append(RawFile(fname,binary=True))
-        # Delete files if necessary
-        if not save_file:
-            logging.debug("Remove temporary files")
+        if fend not in flist:
+            logging.error("Timeout: Simulation is not done yet. Try again later.")
+            return None
+        df = pd.read_csv(os.path.join(self.local_dir,fconfig),skiprows=2)
+        fnames = np.array(df["output_file"])
+        # Get output files from server
+        self.get(fend)
+        fnames_local = self.get(fnames,relative=False)
+        if read_raw:
+            results = [RawFile(fname,binary=True) for fname in fnames_local]
+        else:
+            results = fnames_local
+        df["result"] = results
+        return df
+
+    def remove_files(self,fconfig,dest="both"):
+        """ Clean up the simulation files on local and remote locations
+
+        dest: "local" or "remote" or "both"
+        """
+        fconfig_local = os.path.join(self.local_dir,fconfig)
+        fconfig_remote = backslash(os.path.join(self.remote_dir,fconfig))
+        # Get simulation file names
+        df = pd.read_csv(fconfig_local,skiprows=2)
+        circuit_files_remote = np.array(df["circuit_file"])
+        circuit_files_local = [os.path.join(self.local_dir,os.path.basename(fname)) for fname in circuit_files_remote]
+        output_files_remote = np.array(df["output_file"])
+        output_files_local = [os.path.join(self.local_dir,os.path.basename(fname)) for fname in output_files_remote]
+        fexec_local = os.path.join(self.local_dir,fexec)
+        fexec_remote = backslash(os.path.join(self.remote_dir,fexec))
+        fend = "finish_" + fconfig[:-4] + ".txt"
+        fend_local = os.path.join(self.local_dir,fend)
+        fend_remote = backslash(os.path.join(self.remote_dir,fend))
+        # Start to clean up server files
+        if dest.lower() in ["remote","both"]:
             client = self.new_connection()
             sftp = client.open_sftp()
-            os.remove(fin_local)
-            sftp.remove(fname_exec_remote)
-            sftp.remove(fin_remote)
-            for ckt_fname_local, ckt_fname_remote, out_fname_local, out_fname_remote \
-             in zip(circuit_fnames_local,circuit_fnames_remote,output_fnames_local,output_fnames_remote):
-                os.remove(ckt_fname_local)
-                os.remove(out_fname_local)
-                sftp.remove(ckt_fname_remote)
-                sftp.remove(out_fname_remote)
+            sftp.remove(fconfig_remote)
+            sftp.remove(fexec_remote)
+            sftp.remove(fend_remote)
+            for fname in circuit_files_remote:
+                sftp.remove(fname)
+            for fname in output_files_remote:
+                sftp.remove(fname)
             sftp.close()
             client.close()
-        if reshape:
-            dims = [len(v) for v in iter_params.values() if len(v)>1]
-            data = np.array(data).reshape(dims)
-            param_vals = np.array(param_vals).reshape(dims+[len(iter_params)]).T
-        else:
-            data = np.array(data)
-            param_vals = np.array(param_vals).T
+        # Clean up local files
+        if dest.lower() in ["local","both"]:
+            os.remove(fconfig_local)
+            os.remove(fexec_local)
+            os.remove(fend_local)
+            for fname in circuit_files_local:
+                os.remove(fname)
+            for fname in output_files_local:
+                os.remove(fname)
+
+    def reshape_results(self,df,params):
+        """ Reshape the results
+
+        df: results DataFrame
+        params: simulated script parameters
+        """
+        # Disintegrate the parameters (dict)
+        iter_params = {}
+        kws = {}
+        for k,v in params.items():
+            if (not isinstance(v,str)) and hasattr(v,'__iter__'):
+                # if param value is a list
+                iter_params[k] = v
+            else:
+                kws[k] = v
+        param_vals = list(itertools.product(*[iter_params[k] for k in iter_params.keys()]))
+
+        dims = [len(v) for v in iter_params.values() if len(v)>1]
+        data = np.array(df["result"]).reshape(dims)
+        param_vals = np.array(param_vals).reshape(dims+[len(iter_params)]).T
         param_out = {}
         for i,pname in enumerate(iter_params.keys()):
             param_out[pname] = param_vals[i].T
         return param_out, data
+
+    def run_parallel(self, *script, processes=16, save_file=False,reshape=True,read_raw=True, **params):
+        """ Use multiprocessing to run in parallel
+
+        script: WRspice script to be simulated.
+        processes: number of parallel processes
+        if reshape==False: return output data as a 1-dim array
+        if read_raw==True: import raw file into memory
+        """
+        fconfig = self.prepare_parallel(*script,**params)
+        fconfig_remote = backslash(os.path.join(self.remote_dir,fconfig))
+        fexec_remote = backslash(os.path.join(self.remote_dir,fexec))
+        # Simulate in parallel
+        client = self.new_connection()
+        cmd = "python %s %s --processes=%d" %(fexec_remote,fconfig_remote,processes)
+        logging.info("Run on remote: %s" %cmd)
+        SSH_run(client,cmd)
+        client.close()
+        # Get output files back to local
+        df = self.get_results(fconfig,read_raw=read_raw)
+        if df is None:
+            return df
+        # Delete files if necessary
+        if not save_file:
+            logging.debug("Remove temporary files")
+            self.remove_files(fconfig)
+        if reshape:
+            return self.reshape_results(df,params)
+        else:
+            return df
 
 #=============================
 def SSH_run(client,command):
