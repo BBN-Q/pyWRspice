@@ -311,7 +311,7 @@ class WRWrapper_SSH:
         df["result"] = results
         return df
 
-    def remove_files(self,fconfig,dest="both"):
+    def remove_fconfig(self,fconfig,dest="both"):
         """ Clean up the simulation files on local and remote locations
 
         dest: "local" or "remote" or "both"
@@ -350,6 +350,28 @@ class WRWrapper_SSH:
             for fname in circuit_files_local:
                 os.remove(fname)
             for fname in output_files_local:
+                os.remove(fname)
+
+    def remove_files(self,fnames,dest="both"):
+        """ Clean up the files on local and remote locations
+
+        dest: "local" or "remote" or "both"
+        """
+        if isinstance(fnames,str):
+            fnames = [fnames]
+        # Start to clean up server files
+        if dest.lower() in ["remote","both"]:
+            client = self.new_connection()
+            sftp = client.open_sftp()
+            fnames_remote = self.remote_fname(fnames)
+            for fname in fnames_remote:
+                sftp.remove(fname)
+            sftp.close()
+            client.close()
+        # Clean up local files
+        if dest.lower() in ["local","both"]:
+            fnames_local = self.local_fname(fnames)
+            for fname in fnames_local:
                 os.remove(fname)
 
     def reshape_results(self,df,params):
@@ -401,7 +423,7 @@ class WRWrapper_SSH:
         # Delete files if necessary
         if not save_file:
             logging.debug("Remove temporary files")
-            self.remove_files(fconfig)
+            self.remove_fconfig(fconfig)
         if reshape:
             return self.reshape_results(df,params)
         else:
