@@ -81,6 +81,18 @@ class WRWrapper_SSH:
         ssh.connect(self.server,username=self.login_user,password=self.login_pass)
         return ssh
 
+    def remote_fname(self,fname):
+        """ Convert a base filename to remote filename by adding remote directory """
+        if (not isinstance(fname,str)) and hasattr(fname,'__iter__'):
+            return [backslash(os.path.join(self.remote_dir,name)) for name in fname]
+        return backslash(os.path.join(self.remote_dir,fname))
+
+    def local_fname(self,fname):
+        """ Convert a base filename to local filename by adding local directory """
+        if (not isinstance(fname,str)) and hasattr(fname,'__iter__'):
+            return [os.path.join(self.local_dir,name) for name in fname]
+        return os.path.join(self.local_dir,fname)
+
     def get(self,fnames,relative=True):
         """ Transfer file(s) from remote to local
         relative: if True, fnames are relative to the remote working directory
@@ -233,13 +245,13 @@ class WRWrapper_SSH:
                 kws_cp[pname] = val
             # Make sure they run separate script files
             if "circuit_file" not in kws_cp.keys():
-                kws_cp["circuit_file"] = "tmp_circuit_" + '_'.join([str(val) for val in vals]) + ".cir"
+                kws_cp["circuit_file"] = "tmp_circuit_%d.cir" %i
             else:
-                kws_cp["circuit_file"] = kws_cp["circuit_file"][:-4] + ''.join(['_'+str(val) for val in vals]) + ".cir"
-            if "output_file" not in kws_cp.keys():
-                kws_cp["output_file"] = "tmp_output_" + '_'.join([str(val) for val in vals]) + ".raw"
+                kws_cp["circuit_file"] = kws_cp["circuit_file"][:-4] + "_%d.cir" %i
+            if "output_file" not in kws_cp.keys() or kws_cp["output_file"] in [None,'']:
+                kws_cp["output_file"] = "tmp_output_%d.raw" %i
             else:
-                kws_cp["output_file"] = kws_cp["output_file"][:-4] + ''.join(['_'+str(val) for val in vals]) + ".raw"
+                kws_cp["output_file"] = kws_cp["output_file"][:-4] + "_%d.raw" %i
 
             circuit_fname, output_fname = self._render(self.script,kws_cp)
             circuit_fnames.append(circuit_fname)
