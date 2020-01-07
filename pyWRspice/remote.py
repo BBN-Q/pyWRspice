@@ -2,7 +2,7 @@
 
 """
     Python wrapper for WRspice run on an SSH server
-    class WRWrapper_SSH: Run WRspice script via WRspice simulator on an SSH server.
+    class WRWrapperSSH: Run WRspice script via WRspice simulator on an SSH server.
 
     Required package: paramiko to handle SSH connections
 """
@@ -28,7 +28,7 @@ fexec_orig = os.path.join(dir_path,"data",fexec)
 # Wrapper for convenient parallel loops
 #------------------------------------------
 
-class WRWrapper_SSH:
+class WRWrapperSSH:
     """ Wrapper for WRspice simulator via SSH connection.
 
     script: Declare the script with python format strings.
@@ -56,11 +56,12 @@ class WRWrapper_SSH:
         self.script    = script
         if source is not None:
             self.get_script(source)
-
+        # If local_dir is not specified, create one
         if local_dir is None:
             self.local_dir = backslash(tempfile.TemporaryDirectory())
         else:
             self.local_dir = backslash(local_dir)
+        # If remote_dir is not specified, create one
         if remote_dir is None:
             # Create a tmp folder in the current location
             ssh = self.new_connection()
@@ -74,7 +75,10 @@ class WRWrapper_SSH:
             self.remote_dir = remote_dir
 
     def new_connection(self):
-        """ Make new SSH connection to the server """
+        """ Make new SSH connection to the server
+
+        Note: It is a good practice to close the connection after use
+        """
         logging.debug("Open a new SSH connection")
         ssh = SSHClient()
         ssh.load_system_host_keys()
@@ -84,17 +88,20 @@ class WRWrapper_SSH:
     def remote_fname(self,fname):
         """ Convert a base filename to remote filename by adding remote directory """
         if (not isinstance(fname,str)) and hasattr(fname,'__iter__'):
+            # If fname is a list of file names
             return [backslash(os.path.join(self.remote_dir,name)) for name in fname]
         return backslash(os.path.join(self.remote_dir,fname))
 
     def local_fname(self,fname):
         """ Convert a base filename to local filename by adding local directory """
         if (not isinstance(fname,str)) and hasattr(fname,'__iter__'):
+            # If fname is a list of file names
             return [os.path.join(self.local_dir,name) for name in fname]
         return os.path.join(self.local_dir,fname)
 
     def get(self,fnames,relative=True):
         """ Transfer file(s) from remote to local
+
         relative: if True, fnames are relative to the remote working directory
         """
         ssh = self.new_connection()
@@ -105,22 +112,23 @@ class WRWrapper_SSH:
         local_fnames = []
         for fname in fnames:
             if relative:
-                local_fname = os.path.join(self.local_dir,fname)
-                remote_fname = backslash(os.path.join(self.remote_dir,fname))
+                local_fname = self.local_fname(fname)
+                remote_fname = self.remote_fname(fname)
             else:
-                local_fname = os.path.join(self.local_dir,os.path.basename(fname))
+                local_fname = self.local_fname(os.path.basename(fname))
                 remote_fname = backslash(fname)
             sftp.get(remote_fname,local_fname)
             local_fnames.append(local_fname)
         sftp.close()
         ssh.close()
-        logging.info("Retrieved files from remote: %s" %fnames)
+        logging.debug("Retrieved files from remote: %s" %fnames)
         if len(local_fnames)==1:
             return local_fnames[0]
         return local_fnames
 
     def put(self,fnames,relative=True):
         """ Transfer file(s) from local to remote
+
         relative: if True, fnames are relative to the local working directory
         """
         ssh = self.new_connection()
@@ -131,16 +139,16 @@ class WRWrapper_SSH:
         remote_fnames = []
         for fname in fnames:
             if relative:
-                remote_fname = backslash(os.path.join(self.remote_dir,fname))
-                local_fname = os.path.join(self.local_dir,fname)
+                remote_fname = self.remote_fname(fname)
+                local_fname = self.local_fname(fname)
             else:
-                remote_fname = backslash(os.path.join(self.remote_dir,os.path.basename(fname)))
+                remote_fname = self.remote_fname(os.path.basename(fname))
                 local_fname = fname
             sftp.put(local_fname,remote_fname)
             remote_fnames.append(remote_fname)
         sftp.close()
         ssh.close()
-        logging.info("Sent files to remote: %s" %fnames)
+        logging.debug("Sent files to remote: %s" %fnames)
         if len(remote_fnames)==1:
             return remote_fnames[0]
         return remote_fnames
@@ -155,18 +163,24 @@ class WRWrapper_SSH:
             lines = f.readlines()
         self.script = "".join(lines)
 
-    def run_file(self,fname_remote):
-        """ Run a file on a server """
+    def run_command(self,cmd):
+        """ Run a command cmd on remote """
         client = self.new_connection()
-        cmd = self.command + " -b {}".format(fname_remote)
-        logging.info("Run on remote: %s" %cmd)
         msg = SSH_run(client,cmd)
         client.close()
         return msg
 
+    def run_file(self,fname_remote):
+        """ Simulate a file on a server """
+        cmd = self.command + " -b {}".format(fname_remote)
+        logging.info("Run on remote: %s" %cmd)
+        return self.run_command(cmd)
+
     def _render(self,script,kwargs):
         """ Render a script by formatting it with kwargs
         then write into a local file
+
+        Return (base) circuit and output file names
         """
         if "circuit_file" not in kwargs.keys():
             circuit_fname = self._new_fname("tmp_script_",".cir")
@@ -176,18 +190,17 @@ class WRWrapper_SSH:
             output_fname = self._new_fname("tmp_output_",".raw")
         else:
             output_fname = kwargs["output_file"]
-        # Make sure the paths use backslashes
-        kwargs["output_file"] = backslash(os.path.join(self.remote_dir,output_fname))
+        kwargs["output_file"] = self.remote_fname(output_fname)
         rendered_script = script.format(**kwargs)
-        with open(os.path.join(self.local_dir,circuit_fname),'w') as f:
+        with open(self.local_fname(circuit_fname),'w') as f:
             f.write(rendered_script)
         return circuit_fname, output_fname
 
     def run(self,*script,display=False,save_file=False,**kwargs):
         """ Write a text into a script file fname on SSH server, then run it
+
         If save_file==True: save a local copy of the script file, do not remove fname after execution
         If 'circuit_file' and 'output_file' are not specified in kwargs: use randomly generated filenames
-        local_dir, remote_dir: Local and Remote working directories. If None: use current location.
 
         If display: print output of simulation
         """
@@ -195,7 +208,7 @@ class WRWrapper_SSH:
             # Assume the first argument is the script
             self.script = script[0]
         circuit_fname, output_fname = self._render(self.script,kwargs)
-        kwargs["output_file"] = backslash(os.path.join(self.remote_dir,output_fname))
+        kwargs["output_file"] = self.remote_fname(output_fname)
         # Copy the script file on the server
         circuit_fname_remote = self.put(circuit_fname)
         # Execute file
@@ -205,10 +218,10 @@ class WRWrapper_SSH:
                 print(m)
         # Get the result file back
         output_fname_local = self.get(output_fname)
-        rawfile = RawFile(output_fname_local, binary=True)
+        result = RawFile(output_fname_local, binary=True)
         if not save_file:
             logging.debug("Remove temporary files")
-            os.remove(os.path.join(self.local_dir,circuit_fname))
+            os.remove(self.local_fname(circuit_fname))
             os.remove(output_fname_local)
             # Remove files on the server
             client = self.new_connection()
@@ -218,16 +231,19 @@ class WRWrapper_SSH:
             # Close SFTP and SSH connection
             sftp.close()
             client.close()
-        return rawfile
+        return result
 
     def prepare_parallel(self, *script, **params):
         """ Write script files on local and remote locations
-        to prepare for the actual simulation execution """
+        to prepare for the actual parallel simulation execution
+
+        Return: a config file containing information of the simulation
+        """
         if len(script)>0:
             # Assume the first argument is the script
             self.script = script[0]
-        # Disintegrate the parameters (dict)
-        iter_params = {}
+        # Disintegrate the parameters (dict) into iterative and non-iterative parts
+        iter_params = {} # iterative params
         kws = {}
         for k,v in params.items():
             if (not isinstance(v,str)) and hasattr(v,'__iter__'):
@@ -255,23 +271,23 @@ class WRWrapper_SSH:
 
             circuit_fname, output_fname = self._render(self.script,kws_cp)
             circuit_fnames.append(circuit_fname)
-            kws_cp["circuit_file"] = backslash(os.path.join(self.remote_dir,kws_cp["circuit_file"]))
+            kws_cp["circuit_file"] = self.remote_fname(kws_cp["circuit_file"])
             all_params.append(kws_cp)
         # Copy all circuit files to server
         circuit_fnames_remote = self.put(circuit_fnames)
         # Write config file
         now = datetime.now().strftime("%Y%m%d_%H%M%S")
         fconfig = "simconfig_" + now + ".csv"
-        fconfig_local = os.path.join(self.local_dir,fconfig)
-        comments = []
-        comments.append("# To run manually: python %s %s --processes=<num>" %(fexec,fconfig))
-        comments.append('#' + self.command + " -b ")
+        fconfig_local = self.local_fname(fconfig)
+        comments = """# To run manually: python %s %s --processes=<num>
+        #%s -b
+        """ %(fexec,fconfig,self.command)
         with open(fconfig_local,'w') as f:
-            f.write("".join([cmt + "\n" for cmt in comments]))
+            f.write(comments)
         df = pd.DataFrame(all_params)
         df.to_csv(fconfig_local,mode='a',index=False)
+        # Copy files
         self.put(fconfig)
-        # Copy exec file
         self.put(fexec_orig,relative=False)
         self.get(fexec)
         return fconfig
@@ -279,6 +295,7 @@ class WRWrapper_SSH:
     def get_results(self,fconfig,timeout=10,read_raw=False):
         """ Get simulation results from server
 
+        fconfig: the config file generated by self.prepare_parallel
         timeout (seconds): Maximum time to wait until the simulation finishes
         read_raw: If True, import raw files into memory; otherwise, return filenames only
         """
@@ -286,7 +303,6 @@ class WRWrapper_SSH:
         t0 = time.time()
         t1 = time.time()
         fend = "finish_" + fconfig[:-4] + ".txt"
-        fend_remote = backslash(os.path.join(self.remote_dir,fend))
         client = self.new_connection()
         while t1-t0 < timeout:
             flist = SSH_run(client,"ls %s" %self.remote_dir)
@@ -299,7 +315,7 @@ class WRWrapper_SSH:
         if fend not in flist:
             logging.error("Timeout: Simulation is not done yet. Try again later.")
             return None
-        df = pd.read_csv(os.path.join(self.local_dir,fconfig),skiprows=2)
+        df = pd.read_csv(self.local_fname(fconfig),skiprows=2)
         fnames = np.array(df["output_file"])
         # Get output files from server
         self.get(fend)
@@ -311,49 +327,8 @@ class WRWrapper_SSH:
         df["result"] = results
         return df
 
-    def remove_fconfig(self,fconfig,dest="both"):
-        """ Clean up the simulation files on local and remote locations
-
-        dest: "local" or "remote" or "both"
-        """
-        fconfig_local = os.path.join(self.local_dir,fconfig)
-        fconfig_remote = backslash(os.path.join(self.remote_dir,fconfig))
-        # Get simulation file names
-        df = pd.read_csv(fconfig_local,skiprows=2)
-        circuit_files_remote = np.array(df["circuit_file"])
-        circuit_files_local = [os.path.join(self.local_dir,os.path.basename(fname)) for fname in circuit_files_remote]
-        output_files_remote = np.array(df["output_file"])
-        output_files_local = [os.path.join(self.local_dir,os.path.basename(fname)) for fname in output_files_remote]
-        fexec_local = os.path.join(self.local_dir,fexec)
-        fexec_remote = backslash(os.path.join(self.remote_dir,fexec))
-        fend = "finish_" + fconfig[:-4] + ".txt"
-        fend_local = os.path.join(self.local_dir,fend)
-        fend_remote = backslash(os.path.join(self.remote_dir,fend))
-        # Start to clean up server files
-        if dest.lower() in ["remote","both"]:
-            client = self.new_connection()
-            sftp = client.open_sftp()
-            sftp.remove(fconfig_remote)
-            sftp.remove(fexec_remote)
-            sftp.remove(fend_remote)
-            for fname in circuit_files_remote:
-                sftp.remove(fname)
-            for fname in output_files_remote:
-                sftp.remove(fname)
-            sftp.close()
-            client.close()
-        # Clean up local files
-        if dest.lower() in ["local","both"]:
-            os.remove(fconfig_local)
-            os.remove(fexec_local)
-            os.remove(fend_local)
-            for fname in circuit_files_local:
-                os.remove(fname)
-            for fname in output_files_local:
-                os.remove(fname)
-
     def remove_files(self,fnames,dest="both"):
-        """ Clean up the files on local and remote locations
+        """ Clean up the files on local and/or remote locations
 
         dest: "local" or "remote" or "both"
         """
@@ -374,21 +349,33 @@ class WRWrapper_SSH:
             for fname in fnames_local:
                 os.remove(fname)
 
+    def remove_fconfig(self,fconfig,dest="both"):
+        """ Clean up the simulation files on local and remote locations
+        based on the information in the fconfig file
+
+        dest: "local" or "remote" or "both"
+        """
+        # Get simulation file names
+        df = pd.read_csv(fconfig_local,skiprows=2)
+        circuit_files = [os.path.basename(fname) for fname in df["circuit_file"]]
+        output_files = [os.path.basename(fname) for fname in df["output_file"]]
+        fend = "finish_" + fconfig[:-4] + ".txt"
+        # Remove all of them
+        all_files = [fconfig,fend,fexec] + circuit_files + output_files
+        self.remove_files(all_files,dest=dest)
+
     def reshape_results(self,df,params):
         """ Reshape the results
 
-        df: results DataFrame
+        df: results DataFrame as returned by self.get_results
         params: simulated script parameters
         """
-        # Disintegrate the parameters (dict)
+        # Get iterative parameters
         iter_params = {}
-        kws = {}
         for k,v in params.items():
             if (not isinstance(v,str)) and hasattr(v,'__iter__'):
                 # if param value is a list
                 iter_params[k] = v
-            else:
-                kws[k] = v
         param_vals = list(itertools.product(*[iter_params[k] for k in iter_params.keys()]))
 
         dims = [len(v) for v in iter_params.values() if len(v)>1]
@@ -399,29 +386,28 @@ class WRWrapper_SSH:
             param_out[pname] = param_vals[i].T
         return param_out, data
 
-    def run_parallel(self, *script, processes=16, save_file=False,reshape=True,read_raw=True, **params):
-        """ Use multiprocessing to run in parallel
+    def run_parallel(self, *script, processes=64, save_file=True,reshape=True,read_raw=True, **params):
+        """ Use multiprocessing to run in parallel on remote
 
         script: WRspice script to be simulated.
         processes: number of parallel processes
-        if reshape==False: return output data as a 1-dim array
-        if read_raw==True: import raw file into memory
+        if save_file==False: remove all relevant simulation files after execution (only if read_raw==True)
+        if reshape==False: return output data as a pandas DataFrame
+        if read_raw==True: import raw file into memory, otherise provide the list of output raw filenames
         """
         fconfig = self.prepare_parallel(*script,**params)
-        fconfig_remote = backslash(os.path.join(self.remote_dir,fconfig))
-        fexec_remote = backslash(os.path.join(self.remote_dir,fexec))
+        fconfig_remote = self.remote_fname(fconfig)
+        fexec_remote = self.remote_fname(fexec)
         # Simulate in parallel
-        client = self.new_connection()
         cmd = "python %s %s --processes=%d" %(fexec_remote,fconfig_remote,processes)
         logging.info("Run on remote: %s" %cmd)
-        SSH_run(client,cmd)
-        client.close()
+        self.run_command(cmd)
         # Get output files back to local
         df = self.get_results(fconfig,read_raw=read_raw)
         if df is None:
             return df
         # Delete files if necessary
-        if not save_file:
+        if (not save_file) and read_raw:
             logging.debug("Remove temporary files")
             self.remove_fconfig(fconfig)
         if reshape:

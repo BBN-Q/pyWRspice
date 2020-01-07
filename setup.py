@@ -6,7 +6,7 @@ setup(
     version='0.1',
     author='Raytheon BBN Technologies - QEC Group',
     packages=["pyWRspice"],
-    package_data={'pyWRspice':['data/*.csv']},
+    package_data={'pyWRspice':['data/*.csv','data/*.py']},
     scripts=[],
     url='https://github.com/BBN-Q/pyWRspice',
     license='MIT License',

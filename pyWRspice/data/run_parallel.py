@@ -9,8 +9,8 @@ from datetime import datetime
 from multiprocessing import Pool
 import os, sys, getopt, subprocess
 
-def run_one(cmd):
-    """ Run one file """
+def run_command(cmd):
+    """ Run a command """
     with subprocess.Popen(cmd.split(" "), stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, env=os.environ.copy()) as process:
         proc_stds = process.communicate() # Get output messages
@@ -25,7 +25,7 @@ def run_one(cmd):
         else:
             return msg
 
-def run_batch(fconfig,processes=16):
+def run_batch(fconfig,processes=64):
     """ Run a file with multiprocessing
 
     The file fconfig must contain the command in the second line
@@ -42,7 +42,7 @@ def run_batch(fconfig,processes=16):
     with Pool(processes=processes) as pool:
         results = []
         for cmd in cmds:
-            results.append(pool.apply_async(run_one, (cmd,)))
+            results.append(pool.apply_async(run_command, (cmd,)))
         results = [result.get() for result in results]
     # Write a dummy file to indicate the completion of the simulation
     now = datetime.now()
@@ -62,7 +62,7 @@ def main():
     if len(args)==0:
         raise ValueError("No input file given")
     fname = args[0]
-    processes = 16
+    processes = 64
     display = False
     for o, a in opts:
         if o=="--processes":
