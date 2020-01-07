@@ -15,7 +15,7 @@ import uuid, itertools, logging
 from multiprocessing import Pool
 from paramiko.client import SSHClient
 
-from simulation import RawFile, backslash
+from .simulation import RawFile, backslash
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -356,7 +356,7 @@ class WRWrapperSSH:
         dest: "local" or "remote" or "both"
         """
         # Get simulation file names
-        df = pd.read_csv(fconfig_local,skiprows=2)
+        df = pd.read_csv(self.local_fname(fconfig),skiprows=2)
         circuit_files = [os.path.basename(fname) for fname in df["circuit_file"]]
         output_files = [os.path.basename(fname) for fname in df["output_file"]]
         fend = "finish_" + fconfig[:-4] + ".txt"
