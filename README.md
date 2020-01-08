@@ -9,10 +9,12 @@ PyWRspice is Python wrapper for [WRspice](http://www.wrcad.com/), a SPICE simula
 - Run WRspice simulation and retrieve output data
 - Multiprocessing for running multiple simulations in parallel
 - Adaptive run for parameter optimization
+- Run WRspice remotely on an SSH server
 - Programmatically build circuit scripts
 
 #### In the package:
 - ```simulation.py```: Simulate a complete or parametric WRspice script via WRspice simulator.
+- ```remote.py```: Execute WRspice simulation remotely on an SSH server.
 - ```script.py```: Programmatically construct a WRspice script.
 
 #### Install pyWRspice wrapper
@@ -31,4 +33,4 @@ On Unix, it is likely "/usr/local/xictools/bin/wrspice".
 On Windows, "C:/usr/local/xictools/bin/wrspice.bat".
 
 
-Check out ```examples/Tutorial.ipynb``` for usage.
+Check out ```examples/Tutorial.ipynb``` for basic usage, and ```examples/Remote.ipynb``` for simulation on SSH server.
