@@ -16,6 +16,10 @@ from multiprocessing import Pool
 
 logging.basicConfig(level=logging.WARNING)
 
+# Get the run_parallel.py file
+dir_path = os.path.dirname(os.path.realpath(__file__))
+fexec = os.path.join(dir_path,"data","run_parallel.py")
+
 #------------------------------------------
 # Wrapper for convenient parallel loops
 #------------------------------------------
@@ -28,26 +32,52 @@ class WRWrapper:
     Any other keywords (which become mandatory) are added as named slots in the format string.
 
     source: WRspice .cir source file
+    work_dir: Working directory. If None, use a temporary one.
     command: location of the wrspice exec file, depending on specific system:
     For Unix systems, it is likely "/usr/local/xictools/bin/wrspice"
     For Windows, it is likely "C:/usr/local/xictools/bin/wrspice.bat"
     """
-    def __init__(self, script=None, source=None, command="/usr/local/xictools/bin/wrspice"):
+    def __init__(self, script=None, source=None, work_dir=None, command="/usr/local/xictools/bin/wrspice"):
         self.script    = script
         if source is not None:
             self.get_script(source)
-        self.tmp_dir       = tempfile.TemporaryDirectory()
+        if work_dir is None:
+            self.work_dir = tempfile.TemporaryDirectory().name
+        else:
+            self.work_dir = work_dir
+        if not os.path.exists(self.work_dir):
+            os.mkdir(self.work_dir)
         self.command   = backslash(command)
 
-    def _new_fname(self, suffix):
+    def _new_fname(self, prefix="",suffix=""):
         """ Create a temporary file in the temporary folder """
-        return os.path.join(self.tmp_dir.name, str(uuid.uuid4())+suffix)
+        return backslash(os.path.join(self.work_dir, prefix+str(uuid.uuid4())+suffix))
 
     def get_script(self,fname):
         """ Get WRspice script from .cir file """
         with open(fname,'r') as f:
             lines = f.readlines()
         self.script = "".join(lines)
+
+    def fullpath(self,fname):
+        """ Return the full path of a filename relative to working directory """
+        return backslash(os.path.join(self.work_dir,fname))
+
+    def _render(self,script,kwargs):
+        """ Render a script by formatting it with kwargs
+        then write into a file
+
+        Return circuit and output file names
+        """
+        if "circuit_file" not in kwargs.keys():
+            kwargs["circuit_file"] = self._new_fname("tmp_script_",".cir")
+        if "output_file" not in kwargs.keys() or kwargs["output_file"] in [None, ""]:
+            kwargs["output_file"] = self._new_fname("tmp_output_",".raw")
+        # Render
+        rendered_script = script.format(**kwargs)
+        with open(kwargs["circuit_file"],'w') as f:
+            f.write(rendered_script)
+        return kwargs["circuit_file"], kwargs["output_file"]
 
     def run(self,*script,**kwargs):
         """ Execute the script, return output data from WRspice
@@ -58,31 +88,20 @@ class WRWrapper:
         if len(script)>0:
             # Assume the first argument is the script
             self.script = script[0]
-        if "circuit_file" not in kwargs.keys():
-            kwargs["circuit_file"] = self._new_fname(".cir")
-        if "output_file" not in kwargs.keys() or kwargs["output_file"] in [None, ""]:
-            kwargs["output_file"] = self._new_fname(".raw")
-        # Make sure the paths use backslashes
-        kwargs["circuit_file"] = backslash(kwargs["circuit_file"])
-        kwargs["output_file"] = backslash(kwargs["output_file"])
-        rendered_script = self.script.format(**kwargs)
-        run_script(rendered_script, save_file=True, fname=kwargs["circuit_file"], command=self.command)
+        cir_fname, out_fname = self._render(self.script,kwargs)
+        run_file(cir_fname,command=self.command)
+        return RawFile(out_fname, binary=True)
 
-        return RawFile(kwargs["output_file"], binary=True)
+    def prepare_parallel(self, *script, **params):
+        """ Write script files to prepare for the actual parallel simulation execution
 
-    def run_parallel(self, *script, processes=16, reshape=True, **params):
-        """ Use multiprocessing to run in parallel
-
-        script: (Optional) WRspice script to be simulated.
-        processes: number of parallel processes
-        if reshape==False: return output data as a 1-dim array
+        Return: a config file containing information of the simulation
         """
         if len(script)>0:
             # Assume the first argument is the script
             self.script = script[0]
-        # params has param name and value list
-        # if dim(param)==0 (string or scalar), not include in the iteration
-        iter_params = {}
+        # Disintegrate the parameters (dict) into iterative and non-iterative parts
+        iter_params = {} # iterative params
         kws = {}
         for k,v in params.items():
             if (not isinstance(v,str)) and hasattr(v,'__iter__'):
@@ -91,29 +110,148 @@ class WRWrapper:
             else:
                 kws[k] = v
         param_vals = list(itertools.product(*[iter_params[k] for k in iter_params.keys()]))
+        # Write circuit files
+        circuit_fnames = []
+        all_params = []
+        for i,vals in enumerate(param_vals):
+            kws_cp = kws.copy()
+            for pname,val in zip(iter_params.keys(), vals):
+                kws_cp[pname] = val
+            # Make sure they run separate script files
+            if "circuit_file" not in kws_cp.keys():
+                kws_cp["circuit_file"] = self.fullpath("tmp_circuit_%d.cir" %i)
+            else:
+                kws_cp["circuit_file"] = self.fullpath(kws_cp["circuit_file"][:-4] + "_%d.cir" %i)
+            if "output_file" not in kws_cp.keys() or kws_cp["output_file"] in [None,'']:
+                kws_cp["output_file"] = self.fullpath("tmp_output_%d.raw" %i)
+            else:
+                kws_cp["output_file"] = self.fullpath(kws_cp["output_file"][:-4] + "_%d.raw" %i)
 
-        with Pool(processes=processes) as pool:
-            results = []
-            for i,vals in enumerate(param_vals):
-                kws_cp = kws.copy()
-                for pname,val in zip(iter_params.keys(), vals):
-                    kws_cp[pname] = val
-                logging.debug("Start to execute %d-th processes with parameters: %s" %(i+1,kws_cp))
-                results.append(pool.apply_async(self.run, (self.script,), kws_cp))
-            results = [result.get() for result in results]
+            circuit_fname, output_fname = self._render(self.script,kws_cp)
+            circuit_fnames.append(circuit_fname)
+            all_params.append(kws_cp)
+        # Write config file
+        now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        fconfig = self.fullpath("simconfig_" + now + ".csv")
+        comments = ''.join(["# To run manually: python %s %s --processes=<num>\n" %(fexec,fconfig),
+        "#%s -b \n" %self.command])
+        with open(fconfig,'w') as f:
+            logging.info("Write configuration file: %s" %fconfig)
+            f.write(comments)
+        df = pd.DataFrame(all_params)
+        df.to_csv(fconfig,mode='a',index=False)
+        return fconfig
 
-        if reshape:
-            dims = [len(v) for v in iter_params.values() if len(v)>1]
-            results = np.array(results).reshape(dims)
-            param_vals = np.array(param_vals).reshape(dims+[len(iter_params)]).T
+    def remove_fconfig(self,fconfig,files=["circuit_file","output_file","config"]):
+        """ Clean up the simulation files on local and remote locations
+        based on the information in the fconfig file
+        """
+        # Get simulation file names
+        df = pd.read_csv(fconfig,skiprows=2)
+        fend = os.path.join(os.path.dirname(fconfig),"finish_" + os.path.basename(fconfig)[:-4] + ".txt")
+        all_files = [fend]
+        filetypes = files.copy()
+        if "config" in files:
+            filetypes.pop(filetypes.index("config"))
+            all_files.append(fconfig)
+        for k in filetypes:
+            all_files += list(df[k])
+        # Remove all of them
+        logging.info("Remove files in %s" %files)
+        for fname in all_files:
+            os.remove(fname)
+
+    def get_results(self,fconfig,timeout=20,read_raw=False):
+        """ Get simulation results from server
+
+        fconfig: the config file generated by self.prepare_parallel
+        timeout (seconds): Maximum time to wait until the simulation finishes
+        read_raw: If True, import raw files into memory; otherwise, return filenames only
+        """
+        # First check if the simulation has finished
+        t0 = time.time()
+        t1 = time.time()
+        fend = os.path.join(os.path.dirname(fconfig),"finish_" + os.path.basename(fconfig)[:-4] + ".txt")
+        while t1-t0 < timeout:
+            if os.path.exists(fend):
+                break
+            else:
+                time.sleep(10)
+                t1 = time.time()
+        if not os.path.exists(fend):
+            logging.error("Timeout: Simulation is not done yet. Try again later.")
+            return None
+        df = pd.read_csv(fconfig,skiprows=2)
+        fnames = np.array(df["output_file"])
+        # Get output files from server
+        if read_raw:
+            results = [RawFile(fname,binary=True) for fname in fnames]
         else:
-            results = np.array(results)
-            param_vals = np.array(param_vals).T
+            results = fnames
+        df["result"] = results
+        return df
+
+    def reshape_results(self,df,params):
+        """ Reshape the results
+
+        df: results DataFrame as returned by self.get_results
+        params: simulated script parameters
+        """
+        # Get iterative parameters
+        iter_params = {}
+        for k,v in params.items():
+            if (not isinstance(v,str)) and hasattr(v,'__iter__'):
+                # if param value is a list
+                iter_params[k] = v
+        param_vals = list(itertools.product(*[iter_params[k] for k in iter_params.keys()]))
+
+        dims = [len(v) for v in iter_params.values() if len(v)>1]
+        data = np.array(df["result"]).reshape(dims)
+        param_vals = np.array(param_vals).reshape(dims+[len(iter_params)]).T
         param_out = {}
         for i,pname in enumerate(iter_params.keys()):
             param_out[pname] = param_vals[i].T
+        return param_out, data
 
-        return param_out, results
+    def run_parallel(self,*script,read_raw=True,processes=16,save_file=True,reshape=True,**params):
+        """ Use multiprocessing to run in parallel
+
+        script (optional): WRspice script to be simulated.
+        processes: number of parallel processes
+        if save_file==False: remove all relevant simulation files after execution (only if read_raw==True)
+        if reshape==False: return output data as a pandas DataFrame
+        if read_raw==True: import raw file into memory, otherise provide the list of output raw filenames
+        """
+        fconfig = self.prepare_parallel(*script,**params)
+        # Simulate in parallel
+        cmd = "python %s %s --processes=%d" %(fexec,fconfig,processes)
+        logging.info("Run simulation: %s" %cmd)
+        t1 = time.time()
+        with subprocess.Popen(cmd.split(" "), stdout=subprocess.PIPE, shell=False,
+                                stderr=subprocess.PIPE, env=os.environ.copy()) as process:
+            t2 = time.time()
+            proc_stds = process.communicate() # Get output messages
+            proc_stdout = proc_stds[0].strip()
+            msg = proc_stdout.decode('ascii')
+            proc_stderr = proc_stds[1].strip()
+            msg_err = proc_stderr.decode('ascii')
+            if len(msg_err)>0 :
+                print("WRspice ERROR when running: %s" %fin)
+                print(msg_err)
+            logging.debug(msg)
+            logging.info("Finished execution. Time elapsed: %.1f seconds" %(t2-t1))
+        # Get output files back to local
+        df = self.get_results(fconfig,read_raw=read_raw)
+        if df is None:
+            return df
+        # Delete files if necessary
+        if (not save_file) and read_raw:
+            logging.debug("Remove temporary files")
+            self.remove_fconfig(fconfig)
+        if reshape:
+            return self.reshape_results(df,params)
+        else:
+            return df
 
     def run_adaptive(self,*script,func=None,refine_func=None,max_num_points=100,processes=16,criterion="difference",**params):
         """ Run multiprocessing simulation witht adaptive repeats
