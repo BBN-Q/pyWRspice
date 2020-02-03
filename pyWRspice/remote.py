@@ -58,7 +58,7 @@ class WRWrapperSSH:
             self.get_script(source)
         # If local_dir is not specified, create one
         if local_dir is None:
-            self.local_dir = backslash(tempfile.TemporaryDirectory())
+            self.local_dir = backslash(tempfile.TemporaryDirectory().name)
         else:
             self.local_dir = backslash(local_dir)
         # If remote_dir is not specified, create one
@@ -279,9 +279,8 @@ class WRWrapperSSH:
         now = datetime.now().strftime("%Y%m%d_%H%M%S")
         fconfig = "simconfig_" + now + ".csv"
         fconfig_local = self.local_fname(fconfig)
-        comments = """# To run manually: python %s %s --processes=<num>
-        #%s -b
-        """ %(fexec,fconfig,self.command)
+        comments = ''.join(["# To run manually: python %s %s --processes=<num>\n" %(fexec,fconfig),
+        "#%s -b \n" %self.command])
         with open(fconfig_local,'w') as f:
             f.write(comments)
         df = pd.DataFrame(all_params)
@@ -302,7 +301,7 @@ class WRWrapperSSH:
         # First check if the simulation has finished
         t0 = time.time()
         t1 = time.time()
-        fend = "finish_" + fconfig[:-4] + ".txt"
+        fend = os.path.join(os.path.dirname(fconfig),"finish_" + os.path.basename(fconfig)[:-4] + ".txt")
         client = self.new_connection()
         while t1-t0 < timeout:
             flist = SSH_run(client,"ls %s" %self.remote_dir)
@@ -359,7 +358,7 @@ class WRWrapperSSH:
         df = pd.read_csv(self.local_fname(fconfig),skiprows=2)
         circuit_files = [os.path.basename(fname) for fname in df["circuit_file"]]
         output_files = [os.path.basename(fname) for fname in df["output_file"]]
-        fend = "finish_" + fconfig[:-4] + ".txt"
+        fend = os.path.join(os.path.dirname(fconfig),"finish_" + os.path.basename(fconfig)[:-4] + ".txt")
         # Remove all of them
         all_files = [fconfig,fend,fexec] + circuit_files + output_files
         self.remove_files(all_files,dest=dest)
