@@ -176,7 +176,7 @@ class WRWrapperSSH:
         logging.info("Run on remote: %s" %cmd)
         return self.run_command(cmd)
 
-    def _render(self,script,kwargs):
+    def render(self,script,kwargs):
         """ Render a script by formatting it with kwargs
         then write into a local file
 
@@ -207,7 +207,7 @@ class WRWrapperSSH:
         if len(script)>0:
             # Assume the first argument is the script
             self.script = script[0]
-        circuit_fname, output_fname = self._render(self.script,kwargs)
+        circuit_fname, output_fname = self.render(self.script,kwargs)
         kwargs["output_file"] = self.remote_fname(output_fname)
         # Copy the script file on the server
         circuit_fname_remote = self.put(circuit_fname)
@@ -269,7 +269,7 @@ class WRWrapperSSH:
             else:
                 kws_cp["output_file"] = kws_cp["output_file"][:-4] + "_%d.raw" %i
 
-            circuit_fname, output_fname = self._render(self.script,kws_cp)
+            circuit_fname, output_fname = self.render(self.script,kws_cp)
             circuit_fnames.append(circuit_fname)
             kws_cp["circuit_file"] = self.remote_fname(kws_cp["circuit_file"])
             all_params.append(kws_cp)

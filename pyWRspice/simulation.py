@@ -63,7 +63,7 @@ class WRWrapper:
         """ Return the full path of a filename relative to working directory """
         return backslash(os.path.join(self.work_dir,fname))
 
-    def _render(self,script,kwargs):
+    def render(self,script,kwargs):
         """ Render a script by formatting it with kwargs
         then write into a file
 
@@ -79,7 +79,7 @@ class WRWrapper:
             f.write(rendered_script)
         return kwargs["circuit_file"], kwargs["output_file"]
 
-    def run(self,*script,**kwargs):
+    def run(self,*script,save_file=False,**kwargs):
         """ Execute the script, return output data from WRspice
 
         script: (Optional) WRspice script to be simulated.
@@ -88,9 +88,24 @@ class WRWrapper:
         if len(script)>0:
             # Assume the first argument is the script
             self.script = script[0]
-        cir_fname, out_fname = self._render(self.script,kwargs)
+        cir_fname, out_fname = self.render(self.script,kwargs)
         run_file(cir_fname,command=self.command)
-        return RawFile(out_fname, binary=True)
+        rawfile = RawFile(out_fname, binary=True)
+        if not save_file:
+            os.remove(cir_fname)
+            os.remove(out_fname)
+        return rawfile
+
+    def get_fconfig(self,fname="simconfig"):
+        """ Generate a config file for parallel simulation """
+        now = datetime.datetime.now().strftime("_%Y%m%d_%H%M%S")
+        fconfig = self.fullpath(fname + now + ".csv")
+        comments = ''.join(["# To run manually: python %s %s --processes=<num>\n" %(fexec,fconfig),
+        "#%s -b \n" %self.command])
+        with open(fconfig,'w') as f:
+            logging.info("Write configuration file: %s" %fconfig)
+            f.write(comments)
+        return fconfig
 
     def prepare_parallel(self, *script, **params):
         """ Write script files to prepare for the actual parallel simulation execution
@@ -127,17 +142,11 @@ class WRWrapper:
             else:
                 kws_cp["output_file"] = self.fullpath(kws_cp["output_file"][:-4] + "_%d.raw" %i)
 
-            circuit_fname, output_fname = self._render(self.script,kws_cp)
+            circuit_fname, output_fname = self.render(self.script,kws_cp)
             circuit_fnames.append(circuit_fname)
             all_params.append(kws_cp)
         # Write config file
-        now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        fconfig = self.fullpath("simconfig_" + now + ".csv")
-        comments = ''.join(["# To run manually: python %s %s --processes=<num>\n" %(fexec,fconfig),
-        "#%s -b \n" %self.command])
-        with open(fconfig,'w') as f:
-            logging.info("Write configuration file: %s" %fconfig)
-            f.write(comments)
+        fconfig = self.get_fconfig()
         df = pd.DataFrame(all_params)
         df.to_csv(fconfig,mode='a',index=False)
         return fconfig
@@ -213,16 +222,9 @@ class WRWrapper:
             param_out[pname] = param_vals[i].T
         return param_out, data
 
-    def run_parallel(self,*script,read_raw=True,processes=16,save_file=True,reshape=True,**params):
-        """ Use multiprocessing to run in parallel
-
-        script (optional): WRspice script to be simulated.
-        processes: number of parallel processes
-        if save_file==False: remove all relevant simulation files after execution (only if read_raw==True)
-        if reshape==False: return output data as a pandas DataFrame
-        if read_raw==True: import raw file into memory, otherise provide the list of output raw filenames
+    def run_fconfig(self,fconfig,processes=16):
+        """ Run simulation in parallel based on information from fconfig
         """
-        fconfig = self.prepare_parallel(*script,**params)
         # Simulate in parallel
         cmd = "python %s %s --processes=%d" %(fexec,fconfig,processes)
         logging.info("Run simulation: %s" %cmd)
@@ -240,6 +242,18 @@ class WRWrapper:
                 print(msg_err)
             logging.debug(msg)
             logging.info("Finished execution. Time elapsed: %.1f seconds" %(t2-t1))
+
+    def run_parallel(self,*script,read_raw=True,processes=16,save_file=True,reshape=True,**params):
+        """ Use multiprocessing to run in parallel
+
+        script (optional): WRspice script to be simulated.
+        processes: number of parallel processes
+        if save_file==False: remove all relevant simulation files after execution (only if read_raw==True)
+        if reshape==False: return output data as a pandas DataFrame
+        if read_raw==True: import raw file into memory, otherise provide the list of output raw filenames
+        """
+        fconfig = self.prepare_parallel(*script,**params)
+        self.run_fconfig(fconfig,processes=processes)
         # Get output files back to local
         df = self.get_results(fconfig,read_raw=read_raw)
         if df is None:
