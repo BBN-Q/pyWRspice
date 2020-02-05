@@ -79,10 +79,12 @@ class WRWrapper:
             f.write(rendered_script)
         return kwargs["circuit_file"], kwargs["output_file"]
 
-    def run(self,*script,save_file=False,**kwargs):
+    def run(self,*script,read_raw=True,save_file=False,**kwargs):
         """ Execute the script, return output data from WRspice
 
-        script: (Optional) WRspice script to be simulated.
+        script: (Optional) WRspice script to be simulated
+        read_raw: if True, read resulting raw data into memory
+        save_file: if False and if read_raw, remove circuit and output files
         kwargs: keyword arguments to be passed to self.script
         """
         if len(script)>0:
@@ -90,11 +92,15 @@ class WRWrapper:
             self.script = script[0]
         cir_fname, out_fname = self.render(self.script,kwargs)
         run_file(cir_fname,command=self.command)
-        rawfile = RawFile(out_fname, binary=True)
-        if not save_file:
-            os.remove(cir_fname)
-            os.remove(out_fname)
-        return rawfile
+        rawfile =
+        if read_raw
+            output = RawFile(out_fname, binary=True)
+            if (not save_file):
+                os.remove(cir_fname)
+                os.remove(out_fname)
+        else:
+            output = out_fname
+        return output
 
     def get_fconfig(self,fname="simconfig"):
         """ Generate a config file for parallel simulation """
