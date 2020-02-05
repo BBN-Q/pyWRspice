@@ -92,8 +92,7 @@ class WRWrapper:
             self.script = script[0]
         cir_fname, out_fname = self.render(self.script,kwargs)
         run_file(cir_fname,command=self.command)
-        rawfile =
-        if read_raw
+        if read_raw:
             output = RawFile(out_fname, binary=True)
             if (not save_file):
                 os.remove(cir_fname)
