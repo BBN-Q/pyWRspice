@@ -385,7 +385,7 @@ class WRWrapperSSH:
             param_out[pname] = param_vals[i].T
         return param_out, data
 
-    def run_parallel(self, *script, processes=64, save_file=True,reshape=True,read_raw=True, **params):
+    def run_parallel(self, *script, processes=multiprocessing.cpu_count()//2, save_file=True,reshape=True,read_raw=True, **params):
         """ Use multiprocessing to run in parallel on remote
 
         script: WRspice script to be simulated.

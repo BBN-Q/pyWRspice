@@ -248,7 +248,7 @@ class WRWrapper:
             logging.debug(msg)
             logging.info("Finished execution. Time elapsed: %.1f seconds" %(t2-t1))
 
-    def run_parallel(self,*script,read_raw=True,processes=16,save_file=True,reshape=True,**params):
+    def run_parallel(self,*script,read_raw=True,processes=multiprocessing.cpu_count()//2,save_file=True,reshape=True,**params):
         """ Use multiprocessing to run in parallel
 
         script (optional): WRspice script to be simulated.
