@@ -12,7 +12,7 @@ import pandas as pd
 import os, tempfile, time
 from datetime import datetime
 import uuid, itertools, logging
-from multiprocessing import Pool
+import multiprocessing as mp
 from paramiko.client import SSHClient
 
 from .simulation import RawFile, backslash
@@ -385,7 +385,7 @@ class WRWrapperSSH:
             param_out[pname] = param_vals[i].T
         return param_out, data
 
-    def run_parallel(self, *script, processes=multiprocessing.cpu_count()//2, save_file=True,reshape=True,read_raw=True, **params):
+    def run_parallel(self, *script, processes=mp.cpu_count()//2, save_file=True,reshape=True,read_raw=True, **params):
         """ Use multiprocessing to run in parallel on remote
 
         script: WRspice script to be simulated.

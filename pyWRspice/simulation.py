@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import os, tempfile, time, datetime
 import uuid, itertools, logging, subprocess
-from multiprocessing import Pool
+import multiprocessing as mp
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -248,7 +248,7 @@ class WRWrapper:
             logging.debug(msg)
             logging.info("Finished execution. Time elapsed: %.1f seconds" %(t2-t1))
 
-    def run_parallel(self,*script,read_raw=True,processes=multiprocessing.cpu_count()//2,save_file=True,reshape=True,**params):
+    def run_parallel(self,*script,read_raw=True,processes=mp.cpu_count()//2,save_file=True,reshape=True,**params):
         """ Use multiprocessing to run in parallel
 
         script (optional): WRspice script to be simulated.
@@ -301,7 +301,7 @@ class WRWrapper:
         points_all = None
         while num <= max_num_points:
             """ Execute the simulations in parallel """
-            with Pool(processes=processes) as pool:
+            with mp.Pool(processes=processes) as pool:
                 results = []
                 for i,vals in enumerate(new_points):
                     kws_cp = kws.copy()
