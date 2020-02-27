@@ -264,7 +264,7 @@ class Script:
         self.analysis = ""
         self.controls = []
         self.params = {}
-        self.save_variables = ""
+        self.save_ports = ""
         self.save_file = None
         self.save_type = "binary"
         self.options = {}
@@ -286,17 +286,28 @@ class Script:
         self.save_file = filename
         self.save_type = filetype
 
+    def _port_index(self,all_ports,port):
+        """ Convert a port name to port index """
+        port = str(port)
+        if port.find('(')>-1:
+            if port[0].lower()=='i':
+                # One wants to measure current, do nothing
+                return port
+            elif port[0].lower()=='v':
+                port = port[port.find('(')+1:port.find(')')]
+        return 'v(' + str(all_ports.index(port)) + ')'
+
     def _save_block(self,all_ports):
         """ Compose a control block specifying saving config """
         if self.save_file is not None:
             self.params["output_file"] = self.save_file
         lines = [".control", "run"]
         lines.append("set filetype=%s" %self.save_type)
-        line = "write {output_file}"
+        line = "write {output_file} "
         if (not isinstance(self.save_ports,str)) and hasattr(self.save_ports,'__iter__'):
-            line += "".join([" v("+str(all_ports.index(str(p)))+')' for p in self.save_ports])
+            line += " ".join([self._port_index(all_ports,p) for p in self.save_ports])
         else:
-            line += " v(" + str(all_ports.index(str(self.save_ports))) + ')'
+            line += self._port_index(all_ports,self.save_ports)
         lines.append(line)
         lines.append(".endc")
         return "\n".join(lines)
