@@ -299,6 +299,8 @@ class Script:
 
     def _save_block(self,all_ports):
         """ Compose a control block specifying saving config """
+        if len(self.save_ports)==0:
+            return ""
         if self.save_file is not None:
             self.params["output_file"] = self.save_file
         lines = [".control", "run"]
