@@ -34,13 +34,6 @@ def split_line(line):
 
 def parse_component(line):
     """ Parse a line of text into circuit component """
-    # Check for the comment
-    c = line.find('*')
-    if c>-1:
-        comment = line[c:]
-        line = line[:c]
-    else:
-        comment = ""
     # Split the line
     parts = split_line(line)
     name = parts[0]
@@ -54,14 +47,10 @@ def parse_component(line):
         i -= 1
     value = parts[i]
     ports = parts[1:i]
-    return script.Component(name,ports,value,params,comment)
+    return script.Component(name,ports,value,params)
 
 def parse_subckt_line(line):
     """ Parse a line of text into subcircuit declaration """
-    # Check for the comment
-    c = line.find('*')
-    if c>-1:
-        line = line[:c]
     # Split the line
     parts = split_line(line)
     name = parts[1]
@@ -78,10 +67,6 @@ def parse_subckt_line(line):
 
 def parse_model(line):
     """ Parse a line of text describing a model """
-    # Check for the comment
-    c = line.find('*')
-    if c>-1:
-        line = line[:c]
     # Split the line
     parts = split_line(line)
     name = parts[1]
@@ -137,9 +122,11 @@ class Parse(script.Script):
     """ Parse
 
     """
-    def __init__(self,scr):
+    def __init__(self,scr=None):
         super(Parse,self).__init__("")
         self.orig_script = scr
+        if self.orig_script is not None:
+            self.parse()
 
     def parse(self,scr=None):
         """ Parse a SPICE script
@@ -149,6 +136,8 @@ class Parse(script.Script):
         """
         if scr is not None:
             self.orig_script = scr
+        if self.orig_script is None:
+            raise ValueError("No SPICE script is specified")
         lines = self.orig_script.split('\n')
         self.title = lines[0]
         circuit = script.Circuit()
@@ -169,6 +158,7 @@ class Parse(script.Script):
                     self.add_control('\n'.join(lines[i:j+1]))
                     i = j
                 elif line[:6]=='.model':
+                    print(line)
                     name, modtype, params = parse_model(line)
                     circuit.add_model(name,modtype,**params)
                 elif line[:7]==".subckt":
