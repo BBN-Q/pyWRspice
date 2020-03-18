@@ -1,5 +1,5 @@
 """
-    Parse a SPICE circuit script
+    Parse a SPICE circuit script (WIP) into a script.Script object
 """
 
 import numpy as np
@@ -94,7 +94,6 @@ def get_subckt_block(lines,start=0):
             break
     return lines[start:i+1]
 
-
 def parse_subckt(block,ckt):
     """ Parse a block of text describing a subcircuit """
     subckt = parse_subckt_line(block[0])
@@ -119,10 +118,15 @@ def parse_subckt(block,ckt):
     ckt.subcircuits[subckt.name] = subckt
 
 class Parse(script.Script):
-    """ Parse
+    """ Parse a SPICE script into a script.Script object
 
+    scr: (optional) SPICE script
     """
     def __init__(self,scr=None):
+        """ Parse a SPICE script into a script.Script object
+
+        scr: (optional) SPICE script
+        """
         super(Parse,self).__init__("")
         self.orig_script = scr
         if self.orig_script is not None:
@@ -130,9 +134,9 @@ class Parse(script.Script):
 
     def parse(self,scr=None):
         """ Parse a SPICE script
+        Ignore comments in the script
 
-        Ignore comments
-
+        scr: (optional) SPICE script
         """
         if scr is not None:
             self.orig_script = scr
@@ -141,10 +145,6 @@ class Parse(script.Script):
         lines = self.orig_script.split('\n')
         self.title = lines[0]
         circuit = script.Circuit()
-        misc = []
-        blocks = []
-        subckts = []
-        ckt_lines = []
         i = 1
         while i<len(lines):
             line = lines[i]
@@ -161,7 +161,7 @@ class Parse(script.Script):
                     print(line)
                     name, modtype, params = parse_model(line)
                     circuit.add_model(name,modtype,**params)
-                elif line[:7]==".subckt":
+                elif line[:7]==".subckt": # subcircuit
                     blc = get_subckt_block(lines,i)
                     parse_subckt(blc,circuit)
                     i = i + len(blc) - 1
@@ -173,8 +173,3 @@ class Parse(script.Script):
             i += 1
         # Wrap up
         self.circuits.append(circuit)
-
-    # def script(self):
-    #     """ Rewrite the script function
-    #     """
-    #     pass
