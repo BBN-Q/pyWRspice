@@ -176,7 +176,7 @@ class Circuit:
         else:
             return label[0].upper()
 
-    def plot(self,show_value=False,node_shape='o',font_weight="bold",**kwargs):
+    def plot(self,show_value=False,node_shape='o',font_weight="bold", pos_func=nx.kamada_kawai_layout, **kwargs):
         """ Plot the circuit schematic using networkx and matplotlib """
         # Set up a graph
         graph = nx.Graph()
@@ -211,6 +211,10 @@ class Circuit:
                         val = str(val)
                     label += ' (' + val + ')'
             node_label[node] = label
+
+        # Position functions
+        pos = pos_func(graph) if pos_func else None
+
         # Plot
         nx.draw_networkx(graph,arrows=False,with_labels=True,
                         nodelist = nodes,
@@ -219,6 +223,7 @@ class Circuit:
                         node_color = node_color,
                         node_shape = node_shape,
                         font_weight = font_weight,
+                        pos = pos,
                         **kwargs)
 
     def reset(self):
