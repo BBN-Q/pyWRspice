@@ -99,7 +99,7 @@ def parse_subckt(block,ckt):
     subckt = parse_subckt_line(block[0])
     i = 1
     while i<len(block)-1:
-        line = block[i]
+        line = block[i].strip()
         if len(line)==0 or line[0]=='*':
             pass # Ignore comments
         elif line[:6]=='.model':
@@ -147,7 +147,7 @@ class Parse(script.Script):
         circuit = script.Circuit()
         i = 1
         while i<len(lines):
-            line = lines[i]
+            line = lines[i].strip()
             if len(line)==0 or line[0]=='*':
                 pass # Ignore comments
             elif line[0]=='.':
@@ -158,7 +158,6 @@ class Parse(script.Script):
                     self.add_control('\n'.join(lines[i:j+1]))
                     i = j
                 elif line[:6]=='.model':
-                    print(line)
                     name, modtype, params = parse_model(line)
                     circuit.add_model(name,modtype,**params)
                 elif line[:7]==".subckt": # subcircuit
