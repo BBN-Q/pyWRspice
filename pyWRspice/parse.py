@@ -3,6 +3,7 @@
 """
 
 import numpy as np
+import re
 from . import script
 
 def split_line(line):
@@ -10,9 +11,11 @@ def split_line(line):
 
     Treat part enclosed by parentheses as a single unit
     """
-    parts = line.split()
+    line = re.sub('\s*=\s*','=',line)
+    parts = re.split(',|\s',line)
     output = []
     i = 0
+    # Deal with parentheses
     while i<len(parts):
         if parts[i].find('(') > -1:
             # Open parenthesis, need to find the closing one
