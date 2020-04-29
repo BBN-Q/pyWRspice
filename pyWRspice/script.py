@@ -18,26 +18,12 @@ class Component:
     def __init__(self,name,ports=[],value=None,params={},comment=""):
         self.name = name
         self.ports = [str(p) for p in ports]
-        self.ports_numeric = np.arange(len(ports), dtype=np.int) + 1
         self.value = value
         self.params = params
         self.comment = comment
 
     def script(self):
         """ Generate a WRspice script """
-        if len(self.comment)>0:
-            disp = ("* %s" %self.comment) + "\n"
-        else:
-            disp = ""
-        disp += str(self.name) + ''.join([' '+str(p) for p in self.ports_numeric])
-        if self.value is not None:
-            disp += ' ' + str(self.value)
-        if len(self.params.keys())>0:
-            for k,v in self.params.items():
-                disp += ' ' + k+'='+str(v)
-        return disp
-
-    def __repr__(self):
         if len(self.comment)>0:
             disp = ("* %s" %self.comment) + "\n"
         else:
@@ -49,6 +35,9 @@ class Component:
             for k,v in self.params.items():
                 disp += ' ' + k+'='+str(v)
         return disp
+
+    def __repr__(self):
+        return self.script()
 
 class Node:
     """ Electrical element or connection node"""
@@ -129,7 +118,6 @@ class Circuit:
 
     def script(self):
         """ Generate a WRspice script for the circuit """
-        self._assign_ports()
         text = []
         # Declare all subcircuits
         for name,subckt in self.subcircuits.items():
@@ -151,22 +139,6 @@ class Circuit:
             text.append(self._extrascript)
         return "\n".join(text)
 
-    def get_ports(self):
-        """ Get all ports """
-        all_ports = ['0']
-        for com in self.components.values():
-            for p in com.ports:
-                if str(p) not in all_ports:
-                    all_ports.append(str(p))
-        return all_ports
-
-    def _assign_ports(self):
-        """ Assign numbers to ports """
-        # Get all ports and translate to numeric ports
-        all_ports = self.get_ports()
-        for com in self.components.values():
-            com.ports_numeric = [all_ports.index(str(p)) for p in com.ports]
-
     def _get_key(self,node):
         label = str(node)
         if label[:3].upper()=="GND":
@@ -184,7 +156,10 @@ class Circuit:
             nodes = []
             nodes.append(Node.from_component(comp))
             for p in comp.ports:
-                nodes.append(Node.from_port(p))
+                if p=='0':
+                    nodes.append(Node.from_port(p))
+                else:
+                    nodes.append(Node.from_port("1_"+str(p)))
             for node in nodes:
                 graph.add_node(node.name,**node.attrs)
             for i in range(1,len(nodes)):
@@ -200,6 +175,8 @@ class Circuit:
             label = str(node)
             if label[:3].upper()=="GND":
                 label = '0'
+            elif label[:2]=="1_":
+                label = label[2:]
             if show_value and ("value" in nodes[node].keys()):
                 val = nodes[node]["value"]
                 if val not in [None,""]:
@@ -211,10 +188,8 @@ class Circuit:
                         val = str(val)
                     label += ' (' + val + ')'
             node_label[node] = label
-
         # Position functions
         pos = pos_func(graph) if pos_func else None
-
         # Plot
         nx.draw_networkx(graph,arrows=False,with_labels=True,
                         nodelist = nodes,
@@ -248,8 +223,7 @@ class SubCircuit:
         ckt.plot(**kwargs)
 
     def script(self):
-        all_ports = self.circuit.get_ports()
-        line = ".subckt " + self.name + "".join([' '+str(all_ports.index(str(p))) for p in self.ports])
+        line = ".subckt " + self.name + "".join([' '+str(p) for p in self.ports])
         for k,v in self.params.items():
             line += ' ' + k + '=' + str(v)
         return "\n".join([line,self.circuit.script(),".ends "+self.name])
@@ -291,18 +265,15 @@ class Script:
         self.save_file = filename
         self.save_type = filetype
 
-    def _port_index(self,all_ports,port):
+    def _save_portname(self,port):
         """ Convert a port name to port index """
         port = str(port)
-        if port.find('(')>-1:
-            if port[0].lower()=='i':
-                # One wants to measure current, do nothing
-                return port
-            elif port[0].lower()=='v':
-                port = port[port.find('(')+1:port.find(')')]
-        return 'v(' + str(all_ports.index(port)) + ')'
+        if port[0].lower() in ['i','v']:
+            return port
+        else:
+            return 'v(' + str(port) + ')'
 
-    def _save_block(self,all_ports):
+    def _save_block(self):
         """ Compose a control block specifying saving config """
         if len(self.save_ports)==0:
             return ""
@@ -312,9 +283,9 @@ class Script:
         lines.append("set filetype=%s" %self.save_type)
         line = "write {output_file} "
         if (not isinstance(self.save_ports,str)) and hasattr(self.save_ports,'__iter__'):
-            line += " ".join([self._port_index(all_ports,p) for p in self.save_ports])
+            line += " ".join([self._save_portname(p) for p in self.save_ports])
         else:
-            line += self._port_index(all_ports,self.save_ports)
+            line += self._save_portname(self.save_ports)
         lines.append(line)
         lines.append(".endc")
         return "\n".join(lines)
@@ -322,8 +293,6 @@ class Script:
     def script(self):
         """ Return a WRspice script """
         # Get all the ports
-        cir_all = self._combine_circuit()
-        cir_all._assign_ports()
         text = ["*"+self.title, self.analysis]
         text += [ckt.script() for ckt in self.circuits]
         text += self.controls
@@ -332,7 +301,7 @@ class Script:
             for k,v in self.options.items():
                 options += " {}={}".format(k,v)
             text.append(options)
-        text.append(self._save_block(cir_all.get_ports()))
+        text.append(self._save_block())
         return "\n".join(text)
 
     def get_params(self):
