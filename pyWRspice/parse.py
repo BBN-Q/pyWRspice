@@ -71,12 +71,14 @@ def parse_subckt_line(line):
 def parse_model(line):
     """ Parse a line of text describing a model """
     # Split the line
+    line = line.replace('(',' (')
     parts = split_line(line)
     name = parts[1]
     modtype = parts[2]
     # Extract parameters
     vals = ''.join(parts[3:])
-    vals = vals[1:-1].split(',')
+    vals = vals[vals.find('(')+1:vals.rfind(')')]
+    vals = re.split(',|\s',vals)
     params = {}
     for val in vals:
         vs = val.split('=')
