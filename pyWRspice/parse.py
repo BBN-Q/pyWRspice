@@ -12,7 +12,11 @@ def split_line(line):
     Treat part enclosed by parentheses as a single unit
     """
     line = re.sub('\s*=\s*','=',line)
-    parts = re.split(',|\s',line)
+    parts = []
+    for p in re.split(',|\s',line):
+        part = p.strip()
+        if len(part)>0:
+            parts.append(part)
     output = []
     i = 0
     # Deal with parentheses
