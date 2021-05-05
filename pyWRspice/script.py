@@ -152,11 +152,13 @@ class Circuit:
         """ Plot the circuit schematic using networkx and matplotlib """
         # Set up a graph
         graph = nx.Graph()
-        for k,comp in self.components.items():
+        components = self.components.copy()
+        # Add components to the network
+        for k,comp in components.items():
             nodes = []
             nodes.append(Node.from_component(comp))
             for p in comp.ports:
-                if p=='0':
+                if p=='0' or comp.name.upper()[0]=='K':
                     nodes.append(Node.from_port(p))
                 else:
                     nodes.append(Node.from_port("1_"+str(p)))
