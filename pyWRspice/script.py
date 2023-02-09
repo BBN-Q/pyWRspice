@@ -104,10 +104,16 @@ class Circuit:
         for comp in comps:
             self.add_component(comp)
 
-    def add_subcircuit(self,ckt,name,ports,params={}):
-        """ Add a Circuit instance as subcircuit """
+    def create_subcircuit(self,ckt,name,ports,params={}):
+        """Create a SubCircuit from a Circuit instance"""
         subckt = SubCircuit(name,ckt,ports,params)
-        self.subcircuits[name] = subckt
+        self.add_subcircuit(subckt)
+
+    def add_subcircuit(self, subckt):
+        """Create a SubCircuit from a Circuit instance"""
+        if subckt.name in self.subcircuits:
+            raise Exception(f"Subcircuit {name} is already in this circuit")
+        self.subcircuits[subckt.name] = subckt
 
     def add_model(self,name,modtype,**params):
         model = {"name": name, "type": modtype, "params": params}
