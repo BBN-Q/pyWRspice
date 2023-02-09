@@ -92,6 +92,7 @@ class WRWrapper:
             self.script = script[0]
         cir_fname, out_fname = self.render(self.script,kwargs)
         run_file(cir_fname,command=self.command)
+        # print(out_fname, save_file, read_raw)
         if read_raw:
             output = RawFile(out_fname, binary=True)
             if (not save_file):
@@ -587,6 +588,10 @@ class RawFile:
         for vari in self.variables:
             data[vari.name] = vari.values
         return pd.DataFrame(data)
+
+    def __getitem__(self, name):
+        ind = [i for i,v in enumerate(self.variables) if v.name==name][0]
+        return self.variables[ind].values
 
     def to_array(self):
         """ Convert variables to numpy array """
