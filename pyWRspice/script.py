@@ -92,6 +92,13 @@ class Circuit:
                 self.params[key] = ""
         return self.params
 
+    def add(self, comp):
+        """Alias for add_component and add_components"""
+        if isinstance(comp, list):
+            self.add_components(comp)
+        else:
+            self.add_component(comp)
+
     def add_component(self,comp):
         """ Add an instance of Component() to the circuit """
         if comp.name in self.components.keys():
