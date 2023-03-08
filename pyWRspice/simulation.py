@@ -13,6 +13,10 @@ import pandas as pd
 import os, tempfile, time, datetime
 import uuid, itertools, logging, subprocess
 import multiprocessing as mp
+try:
+    from adapt.refine import refine_scalar_field, refine_1D, well_scaled_delaunay_mesh
+except:
+    raise Exception("Could not import the 'adapt' package. Please install from github.com/bbn-q/adapt" )
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -273,21 +277,17 @@ class WRWrapper:
         else:
             return df
 
-    def run_adaptive(self,*script,func=None,refine_func=None,max_num_points=100,processes=16,criterion="difference",**params):
+    def run_adaptive_2D(self,script,scalar_func,processes=mp.cpu_count(),
+                    max_num_points=100,refine_kwargs={"criterion":"difference"},
+                    **params):
         """ Run multiprocessing simulation witht adaptive repeats
 
-        script: (Optional) WRspice script to be simulated.
-        func: Function to calculate the desired output to be evaluated for repetition
-        refine_func: Criterion function to determine the next points to run
+        script: WRspice script to be simulated.
+        scalar_func: function to calculate the desired output to be evaluated for repetition, takes the current dictionary of parameters and the raw file object as positional arguments 
         max_num_points: Maximum number of points
+        refine_kwargs: dictionary to be supplied as keyword arguments to the refine function (see bbnadapt documentation for details)
         """
-        if func is None or refine_func is None:
-            raise ValueError("Refine functions not determined.")
-        if len(script)>0:
-            # Assume the first argument is the script
-            self.script = script[0]
-        # params has param name and value list
-        # if dim(param)==0 (string or scalar), not include in the iteration
+
         iter_params = {}
         kws = {}
         for k,v in params.items():
@@ -295,37 +295,57 @@ class WRWrapper:
                 iter_params[k] = v
             else:
                 kws[k] = v
-        new_points = np.array(list(itertools.product(*[v for v in iter_params.values()]))).flatten()
-        num = int(len(new_points)/len(iter_params))
-        new_points = new_points.reshape(num,len(iter_params))
-        results_all = []
-        points_all = None
-        while num <= max_num_points:
-            """ Execute the simulations in parallel """
-            with mp.Pool(processes=processes) as pool:
-                results = []
-                for i,vals in enumerate(new_points):
+        points_new = np.array(list(itertools.product(*[v for v in iter_params.values()]))).flatten()
+        num = int(len(points_new)/len(iter_params))
+        points_new = points_new.reshape(num,len(iter_params))
+        results_all = [] # full data files
+        points_all  = np.empty((0,2))
+        scalars_all = np.empty(0)
+
+        def apply_scalar_func(params, results):
+            scalars = np.empty(len(results))
+            for i, (p, r) in enumerate(zip(params, results)):
+                scalars[i] = scalar_func(p,r)
+            return scalars
+
+        while len(points_all) <= max_num_points:
+            
+            with mp.Pool(processes=processes) as pool: # Execute the simulations in parallel
+                results_new = []
+                params_new  = []
+                scalars_new = []
+
+                # Submit simulation jobs
+                for i,vals in enumerate(points_new):
                     kws_cp = kws.copy()
                     for pname,val in zip(iter_params.keys(), vals):
                         kws_cp[pname] = val
+                    params_new.append(kws_cp)
                     logging.debug("Start to execute %d-th processes with parameters: %s" %(i+1,kws_cp))
-                    results.append(pool.apply_async(self.run, (self.script,), kws_cp))
-                results = [result.get() for result in results]
-            results_all += results
-            if points_all is None:
-                points_all = new_points
-            else:
-                points_all = np.concatenate([points_all,new_points],axis=0)
-            # import ipdb; ipdb.set_trace()
-            new_points = refine_func(points_all,func(points_all,results_all),criterion=criterion)
-            num += len(new_points)
+                    results_new.append(pool.apply_async(self.run, (script,), kws_cp))
+                results_new = [result.get() for result in results_new]
+
+            results_all += results_new # Accumulate all of the file references
+            scalars_new = apply_scalar_func(params_new, results_new) # Caculate the new scalar values
+            scalars_all = np.concatenate([scalars_all, scalars_new],axis=0) # Add the new scalar values to the existing scalar values
+            points_all  = np.concatenate([points_all, points_new],axis=0) # Add the new points to the existing points
+            points_new  = refine_scalar_field(points_all, np.array(scalars_all), **refine_kwargs) # Perform the refinement, find the new points
+            
+            print(f"Found {len(points_new)} new points.")
+
         # Return results and points
         results_all = np.array(results_all)
         param_out = {}
         points = points_all.T
         for i,pname in enumerate(iter_params.keys()):
             param_out[pname] = points[i].T
-        return param_out, results_all
+
+        # Get the mesh for plotting and such
+        mesh, scales, offsets = well_scaled_delaunay_mesh(points_all)
+        for i in range(points_all.shape[1]):
+            mesh.points[:,i] = mesh.points[:,i]/scales[i] + offsets[i]
+
+        return param_out, results_all, points_all, scalars_all, mesh
 
 
 #------------------------------
