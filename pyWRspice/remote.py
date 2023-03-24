@@ -17,6 +17,11 @@ from paramiko.client import SSHClient
 
 from .simulation import RawFile, backslash
 
+try:
+    from adapt.refine import refine_scalar_field, refine_1D, well_scaled_delaunay_mesh
+except:
+    raise Exception("Could not import the 'adapt' package. Please install from github.com/bbn-q/adapt" )
+
 logging.basicConfig(level=logging.WARNING)
 
 # Get the run_parallel.py file
@@ -44,12 +49,15 @@ class WRWrapperSSH:
     For Unix systems, it is likely "/usr/local/xictools/bin/wrspice"
     For Windows, it is likely "C:/usr/local/xictools/bin/wrspice.bat"
     """
-    def __init__(self, server, login_user, login_pass,
+    def __init__(self, server, login_user, login_pass=None,
                 local_dir=None, remote_dir=None,
                 script=None, source=None,
                 command="/usr/local/xictools/bin/wrspice"):
         self.server = server
         self.login_user = login_user
+        if login_pass is not None:
+            logging.warning("Please consider using a password-protected SSH key and ssh-agent rather than a plaintext password")
+
         self.login_pass = login_pass
         self.command   = backslash(command)
 
@@ -61,6 +69,11 @@ class WRWrapperSSH:
             self.local_dir = backslash(tempfile.TemporaryDirectory().name)
         else:
             self.local_dir = backslash(local_dir)
+
+        # Create local dir if necessary
+        if not os.path.exists(self.local_dir):
+            os.mkdir(self.local_dir)
+
         # If remote_dir is not specified, create one
         if remote_dir is None:
             # Create a tmp folder in the current location
@@ -196,7 +209,7 @@ class WRWrapperSSH:
             f.write(rendered_script)
         return circuit_fname, output_fname
 
-    def run(self,*script,display=False,save_file=False,**kwargs):
+    def run(self,script,display=False,save_file=False,**kwargs):
         """ Write a text into a script file fname on SSH server, then run it
 
         If save_file==True: save a local copy of the script file, do not remove fname after execution
@@ -204,9 +217,8 @@ class WRWrapperSSH:
 
         If display: print output of simulation
         """
-        if len(script)>0:
-            # Assume the first argument is the script
-            self.script = script[0]
+        self.script = script
+
         circuit_fname, output_fname = self.render(self.script,kwargs)
         kwargs["output_file"] = self.remote_fname(output_fname)
         # Copy the script file on the server
@@ -233,15 +245,14 @@ class WRWrapperSSH:
             client.close()
         return result
 
-    def prepare_parallel(self, *script, **params):
+    def prepare_parallel(self, script, use_outer_product=True, **params):
         """ Write script files on local and remote locations
         to prepare for the actual parallel simulation execution
 
         Return: a config file containing information of the simulation
         """
-        if len(script)>0:
-            # Assume the first argument is the script
-            self.script = script[0]
+        self.script = script
+
         # Disintegrate the parameters (dict) into iterative and non-iterative parts
         iter_params = {} # iterative params
         kws = {}
@@ -251,7 +262,12 @@ class WRWrapperSSH:
                 iter_params[k] = v
             else:
                 kws[k] = v
-        param_vals = list(itertools.product(*[iter_params[k] for k in iter_params.keys()]))
+
+        if use_outer_product:
+            param_vals = list(itertools.product(*[iter_params[k] for k in iter_params.keys()]))
+        else:
+            param_vals = np.vstack([v for v in iter_params.values()]).T
+
         # Write circuit files
         circuit_fnames = []
         all_params = []
@@ -306,7 +322,7 @@ class WRWrapperSSH:
         while t1-t0 < timeout:
             flist = SSH_run(client,"ls %s" %self.remote_dir)
             if fend not in flist:
-                time.sleep(10)
+                time.sleep(2)
                 t1 = time.time()
             else:
                 break
@@ -385,7 +401,7 @@ class WRWrapperSSH:
             param_out[pname] = param_vals[i].T
         return param_out, data
 
-    def run_parallel(self, *script, processes=mp.cpu_count()//2, save_file=True,reshape=True,read_raw=True, **params):
+    def run_parallel(self, script, processes=mp.cpu_count(), save_file=True,reshape=True,read_raw=True,use_outer_product=True, **params):
         """ Use multiprocessing to run in parallel on remote
 
         script: WRspice script to be simulated.
@@ -393,10 +409,11 @@ class WRWrapperSSH:
         if save_file==False: remove all relevant simulation files after execution (only if read_raw==True)
         if reshape==False: return output data as a pandas DataFrame
         if read_raw==True: import raw file into memory, otherise provide the list of output raw filenames
+        if use_outer_product==True: run over all combinations of the iterable elements of kwargs 
         """
-        fconfig = self.prepare_parallel(*script,**params)
+        fconfig        = self.prepare_parallel(script,use_outer_product=use_outer_product,**params)
         fconfig_remote = self.remote_fname(fconfig)
-        fexec_remote = self.remote_fname(fexec)
+        fexec_remote   = self.remote_fname(fexec)
         # Simulate in parallel
         cmd = "python %s %s --processes=%d" %(fexec_remote,fconfig_remote,processes)
         logging.info("Run on remote: %s" %cmd)
@@ -413,6 +430,79 @@ class WRWrapperSSH:
             return self.reshape_results(df,params)
         else:
             return df
+
+    def run_adaptive_2D(self,script,scalar_func,processes=mp.cpu_count(),
+                    max_num_points=100,refine_kwargs={"criterion":"difference"},
+                    **params):
+        """ Run multiprocessing simulation with adaptive repeats
+
+        script: WRspice script to be simulated.
+        scalar_func: function to calculate the desired output to be evaluated for repetition, takes the current dictionary of parameters and the raw file object as positional arguments 
+        max_num_points: Maximum number of points
+        refine_kwargs: dictionary to be supplied as keyword arguments to the refine function (see bbnadapt documentation for details)
+        """
+
+        iter_params = {}
+        kws = {}
+        for k,v in params.items():
+            if (not isinstance(v,str)) and hasattr(v,'__iter__'):
+                iter_params[k] = v
+            else:
+                kws[k] = v
+
+        if len(iter_params) != 2:
+            raise ValueError(f"Must have exactly two (not {len(iter_params)}) sweep axes for 2D adaptive sweep.")
+        sweep_axes = list(iter_params.keys())
+
+        # Run the initial batch of points
+        # df = self.run_parallel(script, processes=processes, reshape=False, **params)
+
+        # points_new  = df[sweep_axes].values
+
+        points_new  = np.array(list(itertools.product(*[v for v in iter_params.values()]))).flatten()
+        num         = int(len(points_new)/2)
+        points_new  = points_new.reshape(num,len(iter_params))
+        results_all = np.empty(0, dtype=object)
+        points_all  = np.empty((0,2))
+        scalars_all = np.empty(0)
+
+        def apply_scalar_func(df):
+            scalars = np.empty(len(df))
+            # This is yucky, but we want the user to be able to use the same analysis functions
+            # for both local and remote runs
+            df['__scalars'] = df.apply(lambda r: scalar_func(r,r['result']), axis=1)
+            return df['__scalars'].values
+
+        while len(points_all) <= max_num_points:
+            iter_params[sweep_axes[0]] = points_new[:,0]
+            iter_params[sweep_axes[1]] = points_new[:,1]
+            df = self.run_parallel(script, processes=processes, use_outer_product=False, reshape=False, **kws, **iter_params)
+            
+            results_new = df['result'].values
+
+            results_all = np.concatenate([results_all, results_new]) # Accumulate all of the file references
+            scalars_new = apply_scalar_func(df) # Caculate the new scalar values
+            scalars_all = np.concatenate([scalars_all, scalars_new],axis=0) # Add the new scalar values to the existing scalar values
+            points_all  = np.concatenate([points_all, points_new],axis=0) # Add the new points to the existing points
+            points_new  = refine_scalar_field(points_all, np.array(scalars_all), **refine_kwargs) # Perform the refinement, find the new points
+            
+            print(f"Found {len(points_new)} new points.")
+
+
+
+        # Return results and points
+        # param_out = {}
+        # points = points_all.T
+        # for i,pname in enumerate(iter_params.keys()):
+        #     param_out[pname] = points[i].T
+
+        # Get the mesh for plotting and such
+        mesh, scales, offsets = well_scaled_delaunay_mesh(points_all)
+        for i in range(points_all.shape[1]):
+            mesh.points[:,i] = mesh.points[:,i]/scales[i] + offsets[i]
+
+        return results_all, points_all, scalars_all, mesh
+        # return param_out, results_all, points_all, scalars_all, mesh
 
 #=============================
 def SSH_run(client,command):
