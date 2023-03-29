@@ -8,6 +8,7 @@ import numpy as np
 import networkx as nx
 import pandas as pd
 import logging, os
+from pyWRspice.simulation import Variable, write_rawfile
 
 # Get the style from NODE_STYLE.csv spreadsheet
 dir_path = os.path.dirname(os.path.realpath(__file__))
@@ -80,6 +81,7 @@ class Circuit:
         self.models = {}
         self._extrascript = script
         self.params = {}
+        self.waveforms = []
 
     def get_params(self):
         """ Get parameters from WRspice template """
@@ -98,6 +100,18 @@ class Circuit:
             self.add_components(comp)
         else:
             self.add_component(comp)
+
+    def add_waveforms(self, wfms, filename="waveforms.raw"):
+        wfm_vars = [Variable("tm", "s", values=wfms[0].time)]
+        idx = 0
+        for wfm in wfms:
+            if wfm.name is None:
+                wfm.name = f"wfm{idx:d}"
+                idx +=1
+            wfm_vars.append(Variable(wfm.name, "", values=wfm.wfm))
+        write_rawfile(filename, wfm_vars)
+        self.waveforms = wfms
+        self.wfm_file = filename
 
     def add_component(self,comp):
         """ Add an instance of Component() to the circuit """
@@ -132,6 +146,17 @@ class Circuit:
     def script(self):
         """ Generate a WRspice script for the circuit """
         text = []
+
+        # Load waveforms
+        if self.waveforms:
+            par_string = " ".join([f"constants.{wfm.name}={wfm.name}" for wfm in self.waveforms])
+            text.append(
+            f".exec\n"
+            f"load {self.wfm_file}\n"
+            f"let constants.tm=tm {par_string}\n"
+            f".endc"
+            )
+
         # Declare all subcircuits
         for name,subckt in self.subcircuits.items():
             text.append(subckt.script())
